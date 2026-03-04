@@ -34,6 +34,8 @@ ORLY_BASE_URL = "https://www." + ORLY_BASE_HOST
 SAFARI_BASE_URL = "https://" + SAFARI_BASE_HOST
 API_ORIGIN_URL = "https://" + API_ORIGIN_HOST
 PROFILE_URL = SAFARI_BASE_URL + "/profile/"
+API_V2_TEMPLATE = "https://" + SAFARI_BASE_HOST + "/api/v2/epubs/urn:orm:book:{0}/"
+API_V2_CHAPTERS_TEMPLATE = "https://" + SAFARI_BASE_HOST + "/api/v2/epub-chapters/?epub_identifier=urn:orm:book:{0}"
 
 # DEBUG
 USE_PROXY = False
@@ -485,6 +487,10 @@ class SafariBooks:
                 ), response.text
             )
 
+            self.display.log(
+                "HTTP %d  %s  [%d bytes]" % (response.status_code, url, len(response.content))
+            )
+
         except (requests.ConnectionError, requests.ConnectTimeout, requests.RequestException) as request_exception:
             self.display.error(str(request_exception))
             return 0
@@ -582,7 +588,24 @@ class SafariBooks:
         if response == 0:
             self.display.exit("API: unable to retrieve book info.")
 
-        response = response.json()
+        if response.status_code == 401 or response.status_code == 403:
+            self.display.exit(
+                "API: authentication failed (HTTP %d) — your cookies may have expired. "
+                "Please refresh them via the Cookie screen." % response.status_code
+            )
+
+        if response.status_code != 200:
+            self.display.exit("API: unexpected status %d retrieving book info." % response.status_code)
+
+        try:
+            response = response.json()
+        except ValueError:
+            snippet = response.text[:200].replace("\n", " ")
+            self.display.exit(
+                "API: response was not valid JSON (HTTP %d, %d bytes): %r" % (
+                    response.status_code, len(response.content), snippet
+                )
+            )
         if not isinstance(response, dict) or len(response.keys()) == 1:
             self.display.exit(self.display.api_error(response))
 
@@ -600,7 +623,21 @@ class SafariBooks:
         if response == 0:
             self.display.exit("API: unable to retrieve book chapters.")
 
-        response = response.json()
+        if response.status_code not in (200, 201):
+            self.display.exit(
+                "API: unexpected status %d retrieving chapters — "
+                "cookies may be expired." % response.status_code
+            )
+
+        try:
+            response = response.json()
+        except ValueError:
+            snippet = response.text[:200].replace("\n", " ")
+            self.display.exit(
+                "API: chapter list response was not valid JSON (HTTP %d, %d bytes): %r" % (
+                    response.status_code, len(response.content), snippet
+                )
+            )
 
         if not isinstance(response, dict) or len(response.keys()) == 1:
             self.display.exit(self.display.api_error(response))
