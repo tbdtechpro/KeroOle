@@ -618,6 +618,25 @@ class SafariBooks:
 
         return response
 
+    def _normalize_v2_book_info(self, v2: dict) -> dict:
+        """Map a v2 book info response to the v1-compatible dict shape."""
+        files_base = (
+            "https://" + SAFARI_BASE_HOST
+            + "/api/v2/epubs/urn:orm:book:" + self.book_id + "/files/"
+        )
+        return {
+            "title": v2.get("title", "n/a"),
+            "isbn": v2.get("isbn", ""),
+            "identifier": v2.get("identifier", ""),
+            "issued": v2.get("publication_date", "n/a"),
+            "description": v2.get("descriptions", {}).get("text/plain", ""),
+            "web_url": files_base,
+            "authors": [],
+            "publishers": [],
+            "rights": "n/a",
+            "subjects": [{"name": t} for t in v2.get("tags", [])],
+        }
+
     def get_book_chapters(self, page=1):
         response = self.requests_provider(urljoin(self.api_url, "chapter/?page=%s" % page))
         if response == 0:
