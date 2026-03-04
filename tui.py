@@ -367,8 +367,11 @@ class AppModel(tea.Model):
             self.screen = Screen.MAIN
         elif key == "enter":
             self._save_cookie()
-        elif key == "backspace":
+        elif key in ("backspace", "delete"):
             self.cookie_input = self.cookie_input[:-1]
+            self.cookie_status = ""
+        elif key == "ctrl+u":
+            self.cookie_input = ""
             self.cookie_status = ""
         elif len(key) == 1:
             self.cookie_input += key
@@ -418,7 +421,13 @@ class AppModel(tea.Model):
             self.cookie_status = "error:No cookie value entered."
             return
 
-        # Accept either a raw cookie string or a JSON dict
+        # Strip leading "Cookie: " label if the user copied the whole header line
+        for prefix in ("Cookie: ", "cookie: ", "Cookie:", "cookie:"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):].strip()
+                break
+
+        # Accept either a JSON dict or a key=value; key=value string
         if raw.startswith("{"):
             try:
                 cookies = json.loads(raw)
@@ -426,16 +435,27 @@ class AppModel(tea.Model):
                 self.cookie_status = "error:Invalid JSON cookie format."
                 return
         else:
-            # Parse key=value; key=value; ... style
+            # Set-Cookie attribute names to ignore (they're not session cookies)
+            _SKIP = frozenset(("path", "domain", "expires", "max-age",
+                               "samesite", "httponly", "secure", "version"))
             cookies = {}
-            for pair in raw.split(";"):
-                pair = pair.strip()
-                if "=" in pair:
-                    k, _, v = pair.partition("=")
-                    cookies[k.strip()] = v.strip()
+            # Try semicolon first, fall back to newline (some copy tools use it)
+            for sep in (";", "\n"):
+                for pair in raw.split(sep):
+                    pair = pair.strip()
+                    if "=" in pair:
+                        k, _, v = pair.partition("=")
+                        k = k.strip()
+                        if k.lower() not in _SKIP:
+                            cookies[k] = v.strip()
+                if cookies:
+                    break
 
         if not cookies:
-            self.cookie_status = "error:Could not parse any cookies."
+            self.cookie_status = (
+                "error:Could not parse cookies. "
+                "Paste the Cookie header value: name=value; name2=value2"
+            )
             return
 
         with open(COOKIES_FILE, "w") as f:
@@ -586,13 +606,20 @@ class AppModel(tea.Model):
     def _view_cookie(self) -> str:
         lines = [self._header("Set Session Cookie"), ""]
 
-        lines.append(label_style.render("Paste your O'Reilly browser session cookie below."))
-        lines.append(label_style.render("Tip: use Ctrl+Shift+V or terminal paste (bracketed paste supported)."))
+        lines.append(label_style.render("How to get your cookie:"))
+        lines.append(label_style.render("  1. Open Chrome/Firefox DevTools (F12) → Network tab"))
+        lines.append(label_style.render("  2. Visit learning.oreilly.com and make sure you're logged in"))
+        lines.append(label_style.render("  3. Click any request → Headers → Request Headers → Cookie"))
+        lines.append(label_style.render("  4. Copy the value (everything after 'Cookie: ')"))
+        lines.append(hint_style.render("  Format:  orm-jwt=eyJ…; orm-rt=eyJ…; _sp=…"))
+        lines.append("")
+        lines.append(label_style.render("Paste below (Ctrl+Shift+V / terminal bracketed paste):"))
         lines.append("")
 
-        # Input display
-        display = self.cookie_input if self.cookie_input else ""
-        truncated = display[-60:] if len(display) > 60 else display
+        # Input display — show last 60 chars + character count
+        char_count = len(self.cookie_input)
+        truncated = self.cookie_input[-60:] if char_count > 60 else self.cookie_input
+        count_str = hint_style.render(f"  ({char_count} chars captured)")
         input_box = (
             Style()
             .border(normal_border())
@@ -602,6 +629,8 @@ class AppModel(tea.Model):
             .render(truncated + "█" if self.cookie_input else "█")
         )
         lines.append(input_box)
+        if char_count > 0:
+            lines.append(count_str)
         lines.append("")
 
         # Status
@@ -613,7 +642,7 @@ class AppModel(tea.Model):
                 lines.append(error_style.render("✗ " + msg))
             lines.append("")
 
-        lines.append(self._footer("Enter  save    Esc  back    Ctrl+C  quit"))
+        lines.append(self._footer("Enter  save    Backspace  clear last char    Esc  back"))
         content = "\n".join(lines)
         return panel_style.width(min(self.width - 4, 72)).render(content)
 
