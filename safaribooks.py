@@ -659,6 +659,22 @@ class SafariBooks:
             "stylesheets": stylesheets,
         }
 
+    @staticmethod
+    def _normalize_v2_toc_entry(entry: dict) -> dict:
+        """Map a v2 table-of-contents entry to the v1-compatible dict shape."""
+        fragment = entry.get("fragment", "")
+        return {
+            "depth": entry["depth"],
+            "fragment": fragment,
+            "id": entry["ourn"].split(":")[-1],
+            "label": entry["title"],
+            "href": entry["reference_id"].split("-/")[-1],
+            "children": [
+                SafariBooks._normalize_v2_toc_entry(c)
+                for c in entry.get("children", [])
+            ],
+        }
+
     def get_book_chapters(self, page=1):
         response = self.requests_provider(urljoin(self.api_url, "chapter/?page=%s" % page))
         if response == 0:

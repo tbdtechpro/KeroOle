@@ -175,3 +175,67 @@ def test_normalize_v2_chapter_no_images():
     chapter = {**V2_CHAPTER, "related_assets": {**V2_CHAPTER["related_assets"], "images": []}}
     result = sb._normalize_v2_chapter(chapter)
     assert result["images"] == []
+
+
+V2_TOC_ENTRY = {
+    "depth": 1,
+    "reference_id": "9781098119058-/preface01.html",
+    "ourn": "urn:orm:book:9781098119058:chapter:preface01.html",
+    "url": "https://learning.oreilly.com/api/v2/epub-chapters/urn:orm:book:9781098119058:chapter:preface01.html/",
+    "fragment": "preface",
+    "title": "Preface",
+    "children": [
+        {
+            "depth": 2,
+            "reference_id": "9781098119058-/preface01.html",
+            "ourn": "urn:orm:book:9781098119058:chapter:preface01.html",
+            "url": "...",
+            "fragment": "id585",
+            "title": "Who Should Read This Book?",
+            "children": [],
+        }
+    ],
+}
+
+V2_TOC_ENTRY_NO_FRAGMENT = {
+    "depth": 1,
+    "reference_id": "9781098119058-/cover.html",
+    "ourn": "urn:orm:book:9781098119058:chapter:cover.html",
+    "url": "...",
+    "fragment": "",
+    "title": "Cover",
+    "children": [],
+}
+
+
+def test_normalize_v2_toc_entry_depth():
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    assert result["depth"] == 1
+
+
+def test_normalize_v2_toc_entry_fragment():
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    assert result["fragment"] == "preface"
+
+
+def test_normalize_v2_toc_entry_id_fallback_when_no_fragment():
+    """When fragment is empty, id must come from the ourn last segment."""
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY_NO_FRAGMENT)
+    assert result["id"] == "cover.html"
+
+
+def test_normalize_v2_toc_entry_label():
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    assert result["label"] == "Preface"
+
+
+def test_normalize_v2_toc_entry_href():
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    assert result["href"] == "preface01.html"
+
+
+def test_normalize_v2_toc_entry_children_normalized():
+    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    assert len(result["children"]) == 1
+    assert result["children"][0]["label"] == "Who Should Read This Book?"
+    assert result["children"][0]["depth"] == 2
