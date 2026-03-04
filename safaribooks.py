@@ -1177,15 +1177,22 @@ class SafariBooks:
         return r, c, mx
 
     def create_toc(self):
-        response = self.requests_provider(urljoin(self.api_url, "toc/"))
+        if self.api_v2:
+            toc_url = urljoin(self.api_url, "table-of-contents/")
+        else:
+            toc_url = urljoin(self.api_url, "toc/")
+
+        response = self.requests_provider(toc_url)
         if response == 0:
-            self.display.exit("API: unable to retrieve book chapters. "
+            self.display.exit("API: unable to retrieve book TOC. "
                               "Don't delete any files, just run again this program"
                               " in order to complete the `.epub` creation!")
 
         response = response.json()
 
-        if not isinstance(response, list) and len(response.keys()) == 1:
+        if self.api_v2:
+            response = [self._normalize_v2_toc_entry(e) for e in response]
+        elif not isinstance(response, list) and len(response.keys()) == 1:
             self.display.exit(
                 self.display.api_error(response) +
                 " Don't delete any files, just run again this program"
