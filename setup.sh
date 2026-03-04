@@ -160,7 +160,8 @@ success "All Python dependencies installed."
 info "Verifying imports…"
 
 python3 - <<'PYCHECK'
-import importlib, sys
+import importlib.util
+import sys
 
 missing = []
 for pkg in ("lxml", "requests", "browser_cookie3", "bubbletea", "lipgloss"):
