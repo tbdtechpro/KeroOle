@@ -387,6 +387,7 @@ class SafariBooks:
         self.check_login()
 
         self.book_id = args.bookid
+        self.api_v2 = False
         self.api_url = self.API_TEMPLATE.format(self.book_id)
 
         self.display.info("Retrieving book info...")
@@ -588,13 +589,25 @@ class SafariBooks:
         if response == 0:
             self.display.exit("API: unable to retrieve book info.")
 
-        if response.status_code == 401 or response.status_code == 403:
+        if response.status_code in (401, 403):
             self.display.exit(
                 "API: authentication failed (HTTP %d) — your cookies may have expired. "
                 "Please refresh them via the Cookie screen." % response.status_code
             )
 
-        if response.status_code != 200:
+        if response.status_code == 404:
+            self.display.info("v1 API returned 404, trying v2 API...")
+            self.api_v2 = True
+            self.api_url = API_V2_TEMPLATE.format(self.book_id)
+            response = self.requests_provider(self.api_url)
+            if response == 0:
+                self.display.exit("API: unable to retrieve book info (v1 and v2 both failed).")
+            if response.status_code != 200:
+                self.display.exit(
+                    "API: v2 also returned HTTP %d for book info." % response.status_code
+                )
+
+        elif response.status_code != 200:
             self.display.exit("API: unexpected status %d retrieving book info." % response.status_code)
 
         try:
@@ -606,6 +619,10 @@ class SafariBooks:
                     response.status_code, len(response.content), snippet
                 )
             )
+
+        if self.api_v2:
+            return self._normalize_v2_book_info(response)
+
         if not isinstance(response, dict) or len(response.keys()) == 1:
             self.display.exit(self.display.api_error(response))
 
