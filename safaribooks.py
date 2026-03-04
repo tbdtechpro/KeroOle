@@ -692,8 +692,13 @@ class SafariBooks:
             ],
         }
 
-    def get_book_chapters(self, page=1):
-        response = self.requests_provider(urljoin(self.api_url, "chapter/?page=%s" % page))
+    def get_book_chapters(self, page=1, _v2_next_url=None):
+        if self.api_v2:
+            url = _v2_next_url or API_V2_CHAPTERS_TEMPLATE.format(self.book_id)
+        else:
+            url = urljoin(self.api_url, "chapter/?page=%s" % page)
+
+        response = self.requests_provider(url)
         if response == 0:
             self.display.exit("API: unable to retrieve book chapters.")
 
@@ -722,13 +727,23 @@ class SafariBooks:
         if response["count"] > sys.getrecursionlimit():
             sys.setrecursionlimit(response["count"])
 
-        result = []
-        result.extend([c for c in response["results"] if "cover" in c["filename"] or "cover" in c["title"]])
-        for c in result:
-            del response["results"][response["results"].index(c)]
+        if self.api_v2:
+            chapters = [self._normalize_v2_chapter(ch) for ch in response["results"]]
+        else:
+            chapters = response["results"]
 
-        result += response["results"]
-        return result + (self.get_book_chapters(page + 1) if response["next"] else [])
+        result = []
+        result.extend([c for c in chapters if "cover" in c["filename"] or "cover" in c["title"]])
+        for c in result:
+            del chapters[chapters.index(c)]
+        result += chapters
+
+        if response["next"]:
+            if self.api_v2:
+                return result + self.get_book_chapters(_v2_next_url=response["next"])
+            else:
+                return result + self.get_book_chapters(page + 1)
+        return result
 
     def get_default_cover(self):
         response = self.requests_provider(self.book_info["cover"], stream=True)
