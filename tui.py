@@ -375,7 +375,13 @@ class CalibreSyncWorker:
         # 2. Scan Books/
         _dir_re = _re.compile(r'^.+\((\w+)\)$')
         local_books = []
-        for entry in sorted(os.scandir(self.books_dir), key=lambda e: e.name):
+        try:
+            dir_entries = sorted(os.scandir(self.books_dir), key=lambda e: e.name)
+        except OSError as exc:
+            self.program.send(CalibreSyncDoneMsg(entries=[], already_synced=0, skipped=0,
+                                                  error=f"Cannot read Books directory: {exc}"))
+            return
+        for entry in dir_entries:
             if not entry.is_dir():
                 continue
             m = _dir_re.match(entry.name)
