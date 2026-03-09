@@ -347,6 +347,79 @@ class ExportLibraryWorker:
         self.program.send(AllDownloadsDoneMsg())
 
 
+# ── Calibre sync worker ───────────────────────────────────────────────────────
+
+class CalibreSyncWorker:
+    """Scans Books/ and calibredb to find unsynced books."""
+
+    def __init__(self, books_dir: str, program: tea.Program):
+        self.books_dir = books_dir
+        self.program   = program
+        self._thread   = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        import re as _re
+        from calibre_sync import run_calibredb_list, parse_calibredb_output, match_books
+        from library import parse_epub_contents
+
+        # 1. Query calibredb
+        raw, err = run_calibredb_list()
+        if err:
+            self.program.send(CalibreSyncDoneMsg(entries=[], already_synced=0, skipped=0, error=err))
+            return
+        calibre_books = parse_calibredb_output(raw)
+
+        # 2. Scan Books/
+        _dir_re = _re.compile(r'^.+\((\w+)\)$')
+        local_books = []
+        for entry in sorted(os.scandir(self.books_dir), key=lambda e: e.name):
+            if not entry.is_dir():
+                continue
+            m = _dir_re.match(entry.name)
+            if not m:
+                continue
+            book_id  = m.group(1)
+            book_dir = entry.path
+
+            # Find EPUB
+            epub_path = ""
+            try:
+                for f in os.listdir(book_dir):
+                    if f.endswith(".epub"):
+                        epub_path = os.path.join(book_dir, f)
+                        break
+            except OSError:
+                pass
+
+            try:
+                book_info, _, _ = parse_epub_contents(book_dir)
+            except Exception:
+                book_info = {}
+
+            local_books.append({
+                "book_id":   book_id,
+                "title":     book_info.get("title") or book_id,
+                "authors":   book_info.get("authors") or [],
+                "isbn":      book_info.get("isbn") or "",
+                "epub_path": epub_path,
+            })
+
+        # 3. Match
+        entries    = match_books(local_books, calibre_books)
+        definitive = [e for e in entries if e.match == "definitive"]
+        visible    = [e for e in entries if e.match != "definitive"]
+        skipped    = sum(1 for lb in local_books if not lb["epub_path"])
+
+        self.program.send(CalibreSyncDoneMsg(
+            entries=visible,
+            already_synced=len(definitive),
+            skipped=skipped,
+        ))
+
+
 # ── Calibre worker ────────────────────────────────────────────────────────────
 
 class CalibreWorker:
@@ -533,6 +606,19 @@ class AppModel(tea.Model):
 
         if isinstance(msg, AllCalibreDoneMsg):
             self.all_calibre_done = True
+            return self, None
+
+        if isinstance(msg, CalibreSyncDoneMsg):
+            self.sync_scanning = False
+            if msg.error:
+                self.sync_error = msg.error
+            else:
+                self.sync_entries        = msg.entries
+                self.sync_already_synced = msg.already_synced
+                self.sync_skipped        = msg.skipped
+                self.sync_selected = {
+                    e.book_id for e in msg.entries if e.match == "none"
+                }
             return self, None
 
         if isinstance(msg, LoginResultMsg):
@@ -1506,6 +1592,11 @@ class AppModel(tea.Model):
         self.sync_all_done    = False
         self.sync_error       = ""
         self.screen           = Screen.CALIBRE_SYNC
+        worker = CalibreSyncWorker(
+            books_dir=os.path.join(PATH, "Books"),
+            program=self._program,
+        )
+        worker.start()
 
     def _key_calibre_sync(self, key: str):
         if key == "escape":
