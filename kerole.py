@@ -18,8 +18,8 @@ from multiprocessing import Process, Queue, Value
 from urllib.parse import urljoin, urlparse, parse_qs, quote_plus
 
 
-class SafariBooksError(Exception):
-    """Raised when SafariBooks encounters an unrecoverable error (TUI/API mode)."""
+class KeroOleError(Exception):
+    """Raised when KeroOle encounters an unrecoverable error (TUI/API mode)."""
 
 
 PATH = os.path.dirname(os.path.realpath(__file__))
@@ -69,7 +69,7 @@ class Display:
         self.quiet = quiet
         self._current_stage = ""
 
-        self.logger = logging.getLogger("SafariBooks.%s" % log_file)
+        self.logger = logging.getLogger("KeroOle.%s" % log_file)
         self.logger.setLevel(logging.INFO)
         logs_handler = logging.FileHandler(filename=self.log_file)
         logs_handler.setFormatter(self.BASE_FORMAT)
@@ -78,7 +78,7 @@ class Display:
 
         self.columns, _ = shutil.get_terminal_size()
 
-        self.logger.info("** Welcome to SafariBooks! **")
+        self.logger.info("** Welcome to KeroOle! **")
 
         self.book_ad_info = False
         self.css_ad_info = Value("i", 0)
@@ -151,7 +151,7 @@ class Display:
 
         self.save_last_request()
         if self.raise_on_exit:
-            raise SafariBooksError(str(error))
+            raise KeroOleError(str(error))
         sys.exit(1)
 
     def unhandled_exception(self, _, o, tb):
@@ -260,7 +260,7 @@ class WinQueue(list):  # TODO: error while use `process` in Windows: can't pickl
         return self.__len__()
 
 
-class SafariBooks:
+class KeroOle:
     LOGIN_URL = API_ORIGIN_URL + "/api/v1/auth/login/"
 
     API_TEMPLATE = SAFARI_BASE_URL + "/api/v1/book/{0}/"
@@ -664,7 +664,7 @@ class SafariBooks:
             "label": entry["title"],
             "href": entry["reference_id"].split("-/")[-1],
             "children": [
-                SafariBooks._normalize_v2_toc_entry(c)
+                KeroOle._normalize_v2_toc_entry(c)
                 for c in entry.get("children", [])
             ],
         }
@@ -1146,7 +1146,7 @@ class SafariBooks:
                  )
 
             if cc["children"]:
-                sr, c, mx = SafariBooks.parse_toc(cc["children"], c, mx)
+                sr, c, mx = KeroOle.parse_toc(cc["children"], c, mx)
                 r += sr
 
             r += "</navPoint>\n"
@@ -1301,9 +1301,9 @@ class SafariBooks:
 
 # MAIN
 if __name__ == "__main__":
-    arguments = argparse.ArgumentParser(prog="safaribooks.py",
+    arguments = argparse.ArgumentParser(prog="kerole.py",
                                         description="Download and generate an EPUB of your favorite books"
-                                                    " from Safari Books Online.",
+                                                    " from O'Reilly Learning.",
                                         add_help=False,
                                         allow_abbrev=False)
 
@@ -1494,7 +1494,7 @@ if __name__ == "__main__":
         args_parsed.cred = [email, password]
 
     elif args_parsed.cred:
-        args_parsed.cred = SafariBooks.parse_cred(args_parsed.cred)
+        args_parsed.cred = KeroOle.parse_cred(args_parsed.cred)
         if not args_parsed.cred:
             arguments.error(
                 "invalid --cred value; expected format: \"account@mail.com:password\""
@@ -1517,5 +1517,5 @@ if __name__ == "__main__":
                 sys.exit(0)
             reg.close()
 
-    SafariBooks(args_parsed)
+    KeroOle(args_parsed)
     sys.exit(0)

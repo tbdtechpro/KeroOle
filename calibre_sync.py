@@ -1,5 +1,5 @@
 """
-calibre_sync.py — Logic for comparing local SafariBooks downloads against a Calibre library.
+calibre_sync.py — Logic for comparing local KeroOle downloads against a Calibre library.
 
 Public API:
   parse_calibredb_output(raw)  → list of calibre book dicts

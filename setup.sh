@@ -9,7 +9,7 @@
 #   1. Verifies Ubuntu 24.04 (warns on other platforms, doesn't abort)
 #   2. Installs system packages: python3, python3-pip, python3-venv, calibre
 #   3. Creates a Python virtual environment (.venv)
-#   4. Installs Python dependencies (including bubbletea/lipgloss from your forks)
+#   4. Installs Python dependencies (including bubblepy/pygloss from your forks)
 #   5. Prints a quick-start guide
 
 set -euo pipefail
@@ -145,11 +145,11 @@ pip install --quiet \
     "requests>=2.28.0" \
     "browser_cookie3"
 
-info "Installing bubbletea (tbdtechpro fork)…"
-pip install --quiet "git+https://github.com/tbdtechpro/bubbletea"
+info "Installing bubblepy (tbdtechpro fork)…"
+pip install --quiet "git+https://github.com/tbdtechpro/bubblepy"
 
-info "Installing lipgloss (tbdtechpro fork)…"
-pip install --quiet "git+https://github.com/tbdtechpro/lipgloss"
+info "Installing pygloss (tbdtechpro fork)…"
+pip install --quiet "git+https://github.com/tbdtechpro/pygloss"
 
 success "All Python dependencies installed."
 
@@ -164,7 +164,7 @@ import importlib.util
 import sys
 
 missing = []
-for pkg in ("lxml", "requests", "browser_cookie3", "bubbletea", "lipgloss"):
+for pkg in ("lxml", "requests", "browser_cookie3", "bubblepy", "pygloss"):
     if importlib.util.find_spec(pkg) is None:
         missing.append(pkg)
 
@@ -182,7 +182,7 @@ success "Import check passed."
 
 echo ""
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
-echo -e "${BOLD}  SafariBooks — Setup Complete!${RESET}"
+echo -e "${BOLD}  KeroOle — Setup Complete!${RESET}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
 echo -e "  ${CYAN}Activate the environment:${RESET}"
@@ -192,7 +192,7 @@ echo -e "  ${CYAN}Launch the interactive TUI:${RESET}"
 echo -e "    python tui.py"
 echo ""
 echo -e "  ${CYAN}Or use the command-line interface:${RESET}"
-echo -e "    python safaribooks.py --cred \"email@example.com:password\" <BOOK_ID>"
+echo -e "    python kerole.py --cred \"email@example.com:password\" <BOOK_ID>"
 echo ""
 echo -e "  ${CYAN}Save session cookie from your browser (for SSO/company login):${RESET}"
 echo -e "    python retrieve_cookies.py --cookie \"orm-jwt=eyJ...; orm-rt=...\""
@@ -202,7 +202,7 @@ echo -e "  ${CYAN}Convert downloaded EPUBs with Calibre:${RESET}"
 echo -e "    python calibre_convert.py Books/*/*.epub"
 echo ""
 echo -e "  ${CYAN}Populate library registry from existing downloads:${RESET}"
-echo -e "    python safaribooks.py --scan-library"
+echo -e "    python kerole.py --scan-library"
 echo ""
 echo -e "  ${YELLOW}Note:${RESET} Email/password login is the recommended method."
 echo -e "  For SSO or company accounts, log in via browser first, then use"

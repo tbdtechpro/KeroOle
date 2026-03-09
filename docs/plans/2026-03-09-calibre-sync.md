@@ -6,7 +6,7 @@
 
 **Architecture:** New `calibre_sync.py` module handles all matching logic (testable in isolation). `tui.py` gets a new `Screen.CALIBRE_SYNC` with three internal phases: scanning, review (checklist), and adding. Two new background workers (`CalibreSyncWorker`, `CalibreAddWorker`) follow the same thread+message pattern as existing workers.
 
-**Tech Stack:** Python stdlib (`subprocess`, `re`, `json`, `dataclasses`), existing `library.parse_epub_contents`, existing `bubbletea` TUI framework, `calibredb` CLI.
+**Tech Stack:** Python stdlib (`subprocess`, `re`, `json`, `dataclasses`), existing `library.parse_epub_contents`, existing `bubblepy` TUI framework, `calibredb` CLI.
 
 ---
 
@@ -119,7 +119,7 @@ def test_match_count():
 **Step 2: Run tests to confirm they fail**
 
 ```bash
-cd /home/matt/github/safaribooks
+cd /home/matt/github/KeroOle/safaribooks
 python -m pytest tests/test_calibre_sync.py -v 2>&1 | head -30
 ```
 Expected: `ImportError` (module doesn't exist yet).
@@ -130,7 +130,7 @@ Create `calibre_sync.py`:
 
 ```python
 """
-calibre_sync.py — Logic for comparing local SafariBooks downloads against a Calibre library.
+calibre_sync.py — Logic for comparing local KeroOle downloads against a Calibre library.
 
 Public API:
   parse_calibredb_output(raw)  → list of calibre book dicts

@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make safaribooks fall back to the O'Reilly v2 API when the v1 book info endpoint returns 404, so newer books (e.g. ISBN `9781098119058`) can be downloaded.
+**Goal:** Make KeroOle fall back to the O'Reilly v2 API when the v1 book info endpoint returns 404, so newer books (e.g. ISBN `9781098119058`) can be downloaded.
 
 **Architecture:** `get_book_info()` probes v1 first; on 404 it sets `self.api_v2 = True`, updates `self.api_url` to the v2 base URL, and re-fetches. `get_book_chapters()` and `create_toc()` branch on `self.api_v2` to use the v2 endpoints and normalize responses into the same dict shape the rest of the code already expects.
 
-**Tech Stack:** Python 3.12, requests, pytest (for tests). All changes are in `safaribooks.py`.
+**Tech Stack:** Python 3.12, requests, pytest (for tests). All changes are in `kerole.py`.
 
 ---
 
@@ -36,7 +36,7 @@ touch tests/__init__.py
 Create `tests/test_v2_normalizers.py`:
 
 ```python
-"""Tests for v2 API response normalizers in SafariBooks."""
+"""Tests for v2 API response normalizers in KeroOle."""
 import pytest
 
 
@@ -68,14 +68,14 @@ git commit -m "test: add pytest and test skeleton for v2 normalizers"
 ### Task 2: Add v2 URL constants
 
 **Files:**
-- Modify: `safaribooks.py:31-36` (module-level constants block)
+- Modify: `kerole.py:31-36` (module-level constants block)
 
 **Step 1: Write the failing test**
 
 Replace `test_placeholder` in `tests/test_v2_normalizers.py`:
 
 ```python
-from safaribooks import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
+from kerole import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
 
 
 def test_v2_constants_have_correct_host():
@@ -101,7 +101,7 @@ source .venv/bin/activate && python -m pytest tests/test_v2_normalizers.py -v
 
 Expected: `ImportError: cannot import name 'API_V2_TEMPLATE'`
 
-**Step 3: Add the constants to `safaribooks.py`**
+**Step 3: Add the constants to `kerole.py`**
 
 After the existing `SAFARI_BASE_URL`, `API_ORIGIN_URL`, `PROFILE_URL` lines (around line 36), add:
 
@@ -121,7 +121,7 @@ Expected: all 3 tests PASS
 **Step 5: Commit**
 
 ```bash
-git add safaribooks.py tests/test_v2_normalizers.py
+git add kerole.py tests/test_v2_normalizers.py
 git commit -m "feat: add v2 API URL constants"
 ```
 
@@ -130,7 +130,7 @@ git commit -m "feat: add v2 API URL constants"
 ### Task 3: Implement `_normalize_v2_book_info()`
 
 **Files:**
-- Modify: `safaribooks.py` (add method to `SafariBooks` class, after `get_book_info` around line 617)
+- Modify: `kerole.py` (add method to `KeroOle` class, after `get_book_info` around line 617)
 - Modify: `tests/test_v2_normalizers.py`
 
 **Step 1: Write the failing test**
@@ -139,7 +139,7 @@ Append to `tests/test_v2_normalizers.py`:
 
 ```python
 from unittest.mock import MagicMock
-from safaribooks import SafariBooks, SAFARI_BASE_HOST
+from kerole import KeroOle, SAFARI_BASE_HOST
 
 # Minimal v2 book info response (as returned by the API)
 V2_BOOK_INFO = {
@@ -158,8 +158,8 @@ V2_BOOK_INFO = {
 
 
 def _make_safari_books():
-    """Return a SafariBooks instance without running __init__ (avoids network calls)."""
-    sb = SafariBooks.__new__(SafariBooks)
+    """Return a KeroOle instance without running __init__ (avoids network calls)."""
+    sb = KeroOle.__new__(KeroOle)
     sb.book_id = "9781098119058"
     sb.api_v2 = False
     return sb
@@ -230,7 +230,7 @@ source .venv/bin/activate && python -m pytest tests/test_v2_normalizers.py -k "n
 
 Expected: `AttributeError: '_normalize_v2_book_info'`
 
-**Step 3: Add `_normalize_v2_book_info` to `SafariBooks` in `safaribooks.py`**
+**Step 3: Add `_normalize_v2_book_info` to `KeroOle` in `kerole.py`**
 
 Insert after `get_book_info()` (after line 617):
 
@@ -266,7 +266,7 @@ Expected: all 9 tests PASS
 **Step 5: Commit**
 
 ```bash
-git add safaribooks.py tests/test_v2_normalizers.py
+git add kerole.py tests/test_v2_normalizers.py
 git commit -m "feat: add _normalize_v2_book_info()"
 ```
 
@@ -275,7 +275,7 @@ git commit -m "feat: add _normalize_v2_book_info()"
 ### Task 4: Implement `_normalize_v2_chapter()`
 
 **Files:**
-- Modify: `safaribooks.py` (add method after `_normalize_v2_book_info`)
+- Modify: `kerole.py` (add method after `_normalize_v2_book_info`)
 - Modify: `tests/test_v2_normalizers.py`
 
 **Step 1: Write the failing test**
@@ -366,7 +366,7 @@ source .venv/bin/activate && python -m pytest tests/test_v2_normalizers.py -k "n
 
 Expected: `AttributeError: '_normalize_v2_chapter'`
 
-**Step 3: Add `_normalize_v2_chapter` to `SafariBooks` in `safaribooks.py`**
+**Step 3: Add `_normalize_v2_chapter` to `KeroOle` in `kerole.py`**
 
 Insert after `_normalize_v2_book_info`:
 
@@ -405,7 +405,7 @@ Expected: all 7 tests PASS
 **Step 5: Commit**
 
 ```bash
-git add safaribooks.py tests/test_v2_normalizers.py
+git add kerole.py tests/test_v2_normalizers.py
 git commit -m "feat: add _normalize_v2_chapter()"
 ```
 
@@ -414,7 +414,7 @@ git commit -m "feat: add _normalize_v2_chapter()"
 ### Task 5: Implement `_normalize_v2_toc_entry()`
 
 **Files:**
-- Modify: `safaribooks.py` (add static method after `_normalize_v2_chapter`)
+- Modify: `kerole.py` (add static method after `_normalize_v2_chapter`)
 - Modify: `tests/test_v2_normalizers.py`
 
 **Step 1: Write the failing test**
@@ -422,7 +422,7 @@ git commit -m "feat: add _normalize_v2_chapter()"
 Append to `tests/test_v2_normalizers.py`:
 
 ```python
-from safaribooks import SafariBooks
+from kerole import KeroOle
 
 V2_TOC_ENTRY = {
     "depth": 1,
@@ -456,33 +456,33 @@ V2_TOC_ENTRY_NO_FRAGMENT = {
 
 
 def test_normalize_v2_toc_entry_depth():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["depth"] == 1
 
 
 def test_normalize_v2_toc_entry_fragment():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["fragment"] == "preface"
 
 
 def test_normalize_v2_toc_entry_id_fallback_when_no_fragment():
     """When fragment is empty, id must come from the ourn last segment."""
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY_NO_FRAGMENT)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY_NO_FRAGMENT)
     assert result["id"] == "cover.html"
 
 
 def test_normalize_v2_toc_entry_label():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["label"] == "Preface"
 
 
 def test_normalize_v2_toc_entry_href():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["href"] == "preface01.html"
 
 
 def test_normalize_v2_toc_entry_children_normalized():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert len(result["children"]) == 1
     assert result["children"][0]["label"] == "Who Should Read This Book?"
     assert result["children"][0]["depth"] == 2
@@ -496,7 +496,7 @@ source .venv/bin/activate && python -m pytest tests/test_v2_normalizers.py -k "n
 
 Expected: `AttributeError: '_normalize_v2_toc_entry'`
 
-**Step 3: Add `_normalize_v2_toc_entry` to `SafariBooks` in `safaribooks.py`**
+**Step 3: Add `_normalize_v2_toc_entry` to `KeroOle` in `kerole.py`**
 
 Insert after `_normalize_v2_chapter` as a `@staticmethod`:
 
@@ -512,7 +512,7 @@ def _normalize_v2_toc_entry(entry: dict) -> dict:
         "label": entry["title"],
         "href": entry["reference_id"].split("-/")[-1],
         "children": [
-            SafariBooks._normalize_v2_toc_entry(c)
+            KeroOle._normalize_v2_toc_entry(c)
             for c in entry.get("children", [])
         ],
     }
@@ -529,7 +529,7 @@ Expected: all 6 tests PASS
 **Step 5: Commit**
 
 ```bash
-git add safaribooks.py tests/test_v2_normalizers.py
+git add kerole.py tests/test_v2_normalizers.py
 git commit -m "feat: add _normalize_v2_toc_entry()"
 ```
 
@@ -538,12 +538,12 @@ git commit -m "feat: add _normalize_v2_toc_entry()"
 ### Task 6: Wire v2 fallback into `__init__` and `get_book_info()`
 
 **Files:**
-- Modify: `safaribooks.py:387-388` (`__init__`, after `self.book_id = args.bookid`)
-- Modify: `safaribooks.py:584-617` (`get_book_info`)
+- Modify: `kerole.py:387-388` (`__init__`, after `self.book_id = args.bookid`)
+- Modify: `kerole.py:584-617` (`get_book_info`)
 
 **Step 1: Add `self.api_v2 = False` in `__init__`**
 
-In `safaribooks.py`, find (around line 387):
+In `kerole.py`, find (around line 387):
 ```python
         self.book_id = args.bookid
         self.api_url = self.API_TEMPLATE.format(self.book_id)
@@ -624,7 +624,7 @@ Expected: all tests PASS (no regressions)
 **Step 4: Commit**
 
 ```bash
-git add safaribooks.py
+git add kerole.py
 git commit -m "feat: wire v2 fallback into get_book_info() on HTTP 404"
 ```
 
@@ -633,7 +633,7 @@ git commit -m "feat: wire v2 fallback into get_book_info() on HTTP 404"
 ### Task 7: Wire v2 into `get_book_chapters()`
 
 **Files:**
-- Modify: `safaribooks.py:619-655` (`get_book_chapters`)
+- Modify: `kerole.py:619-655` (`get_book_chapters`)
 
 **Step 1: Replace `get_book_chapters` with v2-aware version**
 
@@ -705,7 +705,7 @@ Expected: all PASS
 **Step 3: Commit**
 
 ```bash
-git add safaribooks.py
+git add kerole.py
 git commit -m "feat: wire v2 into get_book_chapters()"
 ```
 
@@ -714,7 +714,7 @@ git commit -m "feat: wire v2 into get_book_chapters()"
 ### Task 8: Wire v2 into `create_toc()`
 
 **Files:**
-- Modify: `safaribooks.py:1088-1111` (`create_toc`)
+- Modify: `kerole.py:1088-1111` (`create_toc`)
 
 **Step 1: Replace `create_toc` with v2-aware version**
 
@@ -765,7 +765,7 @@ Expected: all PASS
 **Step 3: Commit**
 
 ```bash
-git add safaribooks.py
+git add kerole.py
 git commit -m "feat: wire v2 into create_toc()"
 ```
 
@@ -779,11 +779,11 @@ git commit -m "feat: wire v2 into create_toc()"
 
 Open the app (or run `python tui.py`) and verify cookies are valid — the TUI cookie screen should show green. If not, refresh them via the browser flow.
 
-**Step 2: Run safaribooks against the v2 book**
+**Step 2: Run KeroOle against the v2 book**
 
 ```bash
 source .venv/bin/activate
-python safaribooks.py 9781098119058
+python kerole.py 9781098119058
 ```
 
 **Expected log output (in `info_9781098119058.log`):**

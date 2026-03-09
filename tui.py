@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-SafariBooks TUI — interactive terminal interface for downloading O'Reilly books.
+KeroOle TUI — interactive terminal interface for downloading O'Reilly books.
 
 Requires:
-  pip install git+https://github.com/tbdtechpro/bubbletea
-  pip install git+https://github.com/tbdtechpro/lipgloss
+  pip install git+https://github.com/tbdtechpro/bubblepy
+  pip install git+https://github.com/tbdtechpro/pygloss
 """
 
 import argparse
@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, List, Optional, Tuple
 
-import bubbletea as tea
-import lipgloss
-from lipgloss import (
+import bubblepy as tea
+import pygloss
+from pygloss import (
     Color,
     Style,
     join_horizontal,
@@ -32,7 +32,7 @@ from lipgloss import (
     Top,
 )
 
-from safaribooks import COOKIES_FILE, PATH, SafariBooks, SafariBooksError
+from kerole import COOKIES_FILE, PATH, KeroOle, KeroOleError
 from retrieve_cookies import parse_cookie_string, get_oreilly_cookies_from_browser, login_with_credentials
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -230,10 +230,10 @@ class DownloadWorker:
                 def cb(stage: str, percent: float, _id=book_id):
                     self.program.send(ProgressMsg(_id, stage, percent))
 
-                sb = SafariBooks(args, progress_callback=cb, raise_on_exit=True, quiet=True)
+                sb = KeroOle(args, progress_callback=cb, raise_on_exit=True, quiet=True)
                 self.program.send(BookDoneMsg(book_id, sb.book_title, sb.epub_path))
 
-            except SafariBooksError as exc:
+            except KeroOleError as exc:
                 self.program.send(BookErrorMsg(book_id, str(exc)))
 
             except Exception as exc:
@@ -913,7 +913,7 @@ class AppModel(tea.Model):
         )
         try:
             save_export_config(cfg)
-            self.settings_status = "ok:Settings saved to ~/.safaribooks.toml"
+            self.settings_status = "ok:Settings saved to ~/.kerole.toml"
         except Exception as exc:
             self.settings_status = f"error:Save failed — {exc}"
 

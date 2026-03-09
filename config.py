@@ -1,7 +1,7 @@
 """
-config.py — User-level configuration for SafariBooks / KeroOle.
+config.py — User-level configuration for KeroOle.
 
-Config file: ~/.safaribooks.toml
+Config file: ~/.kerole.toml
 
 Example:
     [exports]
@@ -19,7 +19,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".safaribooks.toml"
+CONFIG_PATH = Path.home() / ".kerole.toml"
 
 FOLDER_NAME_STYLES = ("title", "id")
 
@@ -82,7 +82,7 @@ def book_folder_name(book_info: dict, book_id: str, style: str = "title") -> str
 # ---------------------------------------------------------------------------
 
 def _load_toml() -> dict:
-    """Load ~/.safaribooks.toml, returning empty dict if missing or unreadable."""
+    """Load ~/.kerole.toml, returning empty dict if missing or unreadable."""
     if not CONFIG_PATH.exists():
         return {}
     try:
@@ -93,7 +93,7 @@ def _load_toml() -> dict:
 
 
 def load_export_config() -> ExportConfig:
-    """Load [exports] section from ~/.safaribooks.toml."""
+    """Load [exports] section from ~/.kerole.toml."""
     data = _load_toml()
     e = data.get("exports", {})
     raw_style = e.get("folder_name_style", "title")
@@ -106,7 +106,7 @@ def load_export_config() -> ExportConfig:
 
 
 def save_export_config(cfg: ExportConfig) -> None:
-    """Write [exports] section back to ~/.safaribooks.toml.
+    """Write [exports] section back to ~/.kerole.toml.
 
     Preserves any other sections already present in the file.
     """

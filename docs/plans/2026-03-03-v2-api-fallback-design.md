@@ -70,7 +70,7 @@ The existing `api_v2_detected` branch in `get()` fires automatically because
 
 | Method               | Change                                                              |
 |----------------------|---------------------------------------------------------------------|
-| `SafariBooks.__init__`| Add `self.api_v2 = False`                                          |
+| `KeroOle.__init__`| Add `self.api_v2 = False`                                          |
 | `get_book_info()`    | On 404, set `api_v2=True`, update `api_url`, re-fetch, normalize   |
 | `get_book_chapters()`| On `api_v2`, use `API_V2_CHAPTERS_TEMPLATE`; follow `next` URL directly; normalize each chapter |
 | `create_toc()`       | On `api_v2`, use `table-of-contents/` path; normalize entries      |

@@ -35,7 +35,7 @@ import json
 import sys
 
 try:
-    from safaribooks import COOKIES_FILE
+    from kerole import COOKIES_FILE
 except ImportError:
     COOKIES_FILE = "cookies.json"
 

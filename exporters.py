@@ -1,5 +1,5 @@
 """
-exporters.py — MarkdownExporter and RagExporter for SafariBooks.
+exporters.py — MarkdownExporter and RagExporter for KeroOle.
 
 MarkdownExporter: converts OEBPS XHTML chapters to GFM Markdown.
 RagExporter: chunks Markdown by heading boundaries into JSONL records.

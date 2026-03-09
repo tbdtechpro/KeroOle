@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-calibre_convert.py — batch Calibre post-processing for SafariBooks EPUBs.
+calibre_convert.py — batch Calibre post-processing for KeroOle EPUBs.
 
 Converts each EPUB through Calibre's ebook-convert pipeline, which fixes
 structural issues and produces a clean, standards-compliant EPUB.
@@ -151,7 +151,7 @@ def batch_convert(
 def main():
     ap = argparse.ArgumentParser(
         prog="calibre_convert.py",
-        description="Convert SafariBooks EPUBs through Calibre for proper formatting.",
+        description="Convert KeroOle EPUBs through Calibre for proper formatting.",
     )
     ap.add_argument(
         "epubs",

@@ -1,8 +1,8 @@
-# SafariBooks (tbdtechpro fork)
+# KeroOle
 
 Download and generate *EPUB* files from your [O'Reilly Learning](https://learning.oreilly.com) library subscription.
 
-> **Note:** This is a maintained fork of [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks).
+> **Note:** KeroOle is a maintained fork of [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks).
 > Credit and thanks to Lorenzo Di Fuccia for the original implementation.
 > This fork adds email/password login, a v2 API fallback, an interactive TUI, and several export features.
 
@@ -27,8 +27,8 @@ Download and generate *EPUB* files from your [O'Reilly Learning](https://learnin
 **Python 3.11+** is required. Run the included setup script to create a virtual environment and install all dependencies:
 
 ```bash
-git clone https://github.com/tbdtechpro/safaribooks.git
-cd safaribooks/
+git clone https://github.com/tbdtechpro/KeroOle.git
+cd KeroOle/
 chmod +x setup.sh
 ./setup.sh
 ```
@@ -37,7 +37,7 @@ The setup script:
 1. Verifies your platform (targets Ubuntu 24.04, warns on others)
 2. Installs system packages via `apt-get` (Python 3, build tools, Calibre)
 3. Creates a `.venv` virtual environment
-4. Installs Python dependencies (`lxml`, `requests`, `browser_cookie3`, `bubbletea`, `lipgloss`)
+4. Installs Python dependencies (`lxml`, `requests`, `browser_cookie3`, `bubblepy`, `pygloss`)
 
 After setup, activate the environment:
 
@@ -51,7 +51,7 @@ lxml>=4.9.0
 requests>=2.28.0
 browser_cookie3
 ```
-Plus `bubbletea` and `lipgloss` (tbdtechpro forks) for the TUI.
+Plus `bubblepy` and `pygloss` (tbdtechpro forks) for the TUI.
 
 ---
 
@@ -64,13 +64,13 @@ This fork supports two authentication methods:
 Pass credentials directly on the command line:
 
 ```bash
-python safaribooks.py --cred "account@example.com:MyPassword" BOOKID
+python kerole.py --cred "account@example.com:MyPassword" BOOKID
 ```
 
 Or use `--login` to be prompted interactively (safer — password not visible in shell history):
 
 ```bash
-python safaribooks.py --login BOOKID
+python kerole.py --login BOOKID
 ```
 
 Session cookies are saved to `cookies.json` automatically. On subsequent runs you can omit credentials until the session expires.
@@ -101,7 +101,7 @@ python retrieve_cookies.py
 ## Usage — CLI
 
 ```bash
-python safaribooks.py [OPTIONS] <BOOK ID>
+python kerole.py [OPTIONS] <BOOK ID>
 ```
 
 The Book ID is the number in the O'Reilly URL:
@@ -110,7 +110,7 @@ The Book ID is the number in the O'Reilly URL:
 ### All Options
 
 ```
-usage: safaribooks.py [--cred <EMAIL:PASS> | --login] [--no-cookies]
+usage: kerole.py [--cred <EMAIL:PASS> | --login] [--no-cookies]
                       [--kindle] [--preserve-log]
                       [--skip-if-downloaded] [--scan-library]
                       [--export-markdown] [--export-db] [--export-rag]
@@ -172,10 +172,10 @@ Every download is automatically recorded in `Books/library.db` (SQLite). Fields 
 
 ```bash
 # Populate registry from existing Books/ directories (no network needed)
-python safaribooks.py --scan-library
+python kerole.py --scan-library
 
 # Skip re-downloading a book already in the registry
-python safaribooks.py --skip-if-downloaded BOOKID
+python kerole.py --skip-if-downloaded BOOKID
 
 # Inspect the registry
 sqlite3 Books/library.db "SELECT title, chapter_count, downloaded_at FROM registry"
@@ -234,7 +234,7 @@ Output path: `Books/{title}/rag/{book_id}_rag.jsonl`
 ### Full Export Example
 
 ```bash
-python safaribooks.py \
+python kerole.py \
   --cred "account@example.com:password" \
   --export-markdown \
   --export-db \
@@ -262,7 +262,7 @@ python calibre_convert.py Books/*/*.epub
 For Kindle, use `--kindle` when downloading, then convert to AZW3 or MOBI:
 
 ```bash
-python safaribooks.py --kindle BOOKID
+python kerole.py --kindle BOOKID
 # Then in Calibre: select "Ignore margins" in conversion options
 ```
 
@@ -273,7 +273,7 @@ python safaribooks.py --kindle BOOKID
 ### Basic download
 
 ```bash
-python safaribooks.py --cred "my@email.com:MyPassword" 9781491958698
+python kerole.py --cred "my@email.com:MyPassword" 9781491958698
 ```
 
 Output:
@@ -295,7 +295,7 @@ Output:
 ### Skip already-downloaded books
 
 ```bash
-python safaribooks.py --cred "my@email.com:MyPassword" --skip-if-downloaded 9781491958698
+python kerole.py --cred "my@email.com:MyPassword" --skip-if-downloaded 9781491958698
 # Book already downloaded: Test-Driven Development with Python, 2nd Edition
 # EPUB: Books/Test-Driven Development with Python 2nd Edition (9781491958698)/9781491958698.epub
 ```
@@ -303,7 +303,7 @@ python safaribooks.py --cred "my@email.com:MyPassword" --skip-if-downloaded 9781
 ### Kindle-friendly export
 
 ```bash
-python safaribooks.py --kindle 9781491958698
+python kerole.py --kindle 9781491958698
 ```
 
 ---
@@ -317,6 +317,6 @@ This fork automatically falls back to the O'Reilly v2 API when a book is unavail
 ## Credits
 
 - Original project: [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks) by Lorenzo Di Fuccia
-- This fork: [tbdtechpro/safaribooks](https://github.com/tbdtechpro/safaribooks)
+- This fork (KeroOle): [tbdtechpro/KeroOle](https://github.com/tbdtechpro/KeroOle)
 
-For issues with this fork, please open an issue on the [tbdtechpro/safaribooks](https://github.com/tbdtechpro/safaribooks/issues) repository.
+For issues with KeroOle, please open an issue on the [tbdtechpro/KeroOle](https://github.com/tbdtechpro/KeroOle/issues) repository.

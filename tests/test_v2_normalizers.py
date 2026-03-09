@@ -1,6 +1,6 @@
-"""Tests for v2 API response normalizers in SafariBooks."""
+"""Tests for v2 API response normalizers in KeroOle."""
 import pytest
-from safaribooks import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
+from kerole import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
 
 
 def test_v2_constants_have_correct_host():
@@ -18,7 +18,7 @@ def test_v2_chapters_template_formats_book_id():
     assert url == "https://learning.oreilly.com/api/v2/epub-chapters/?epub_identifier=urn:orm:book:9781098119058"
 
 
-from safaribooks import SafariBooks, SAFARI_BASE_HOST
+from kerole import KeroOle, SAFARI_BASE_HOST
 
 # Minimal v2 book info response (as returned by the API)
 V2_BOOK_INFO = {
@@ -37,8 +37,8 @@ V2_BOOK_INFO = {
 
 
 def _make_safari_books():
-    """Return a SafariBooks instance without running __init__ (avoids network calls)."""
-    sb = SafariBooks.__new__(SafariBooks)
+    """Return a KeroOle instance without running __init__ (avoids network calls)."""
+    sb = KeroOle.__new__(KeroOle)
     sb.book_id = "9781098119058"
     sb.api_v2 = False
     return sb
@@ -208,33 +208,33 @@ V2_TOC_ENTRY_NO_FRAGMENT = {
 
 
 def test_normalize_v2_toc_entry_depth():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["depth"] == 1
 
 
 def test_normalize_v2_toc_entry_fragment():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["fragment"] == "preface"
 
 
 def test_normalize_v2_toc_entry_id_always_from_ourn():
     """id is always derived from the ourn last segment, regardless of fragment."""
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY_NO_FRAGMENT)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY_NO_FRAGMENT)
     assert result["id"] == "cover.html"
 
 
 def test_normalize_v2_toc_entry_label():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["label"] == "Preface"
 
 
 def test_normalize_v2_toc_entry_href():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert result["href"] == "preface01.html"
 
 
 def test_normalize_v2_toc_entry_children_normalized():
-    result = SafariBooks._normalize_v2_toc_entry(V2_TOC_ENTRY)
+    result = KeroOle._normalize_v2_toc_entry(V2_TOC_ENTRY)
     assert len(result["children"]) == 1
     assert result["children"][0]["label"] == "Who Should Read This Book?"
     assert result["children"][0]["depth"] == 2
