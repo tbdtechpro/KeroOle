@@ -21,8 +21,9 @@ import sys
 from pathlib import Path
 
 
-EBOOK_CONVERT = "ebook-convert"
-CALIBREDB     = "calibredb"
+from platform_utils import find_calibre_binary
+EBOOK_CONVERT = find_calibre_binary("ebook-convert")
+CALIBREDB     = find_calibre_binary("calibredb")
 
 
 def check_calibre() -> bool:
@@ -173,9 +174,14 @@ def main():
     args = ap.parse_args()
 
     if not check_calibre():
+        if sys.platform == "win32":
+            _hint = "Download from https://calibre-ebook.com/download_windows"
+        elif sys.platform == "darwin":
+            _hint = "Download from https://calibre-ebook.com/download_osx"
+        else:
+            _hint = "Install with: sudo apt-get install calibre  (or your distro's equivalent)"
         print(
-            "Error: Calibre's `ebook-convert` was not found.\n"
-            "Install it with:  sudo apt-get install calibre",
+            f"Error: Calibre's `ebook-convert` was not found.\n{_hint}",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -14,6 +14,9 @@ import subprocess
 from dataclasses import dataclass
 from typing import List
 
+from platform_utils import find_calibre_binary
+CALIBREDB = find_calibre_binary("calibredb")
+
 
 @dataclass
 class SyncEntry:
@@ -72,7 +75,7 @@ def run_calibredb_list() -> tuple:
     """Run `calibredb list` and return (raw_output, error). Returns ("", error_message) on failure."""
     try:
         result = subprocess.run(
-            ["calibredb", "list", "--fields", "title,authors,identifiers", "--for-machine"],
+            [CALIBREDB, "list", "--fields", "title,authors,identifiers", "--for-machine"],
             capture_output=True,
             text=True,
             timeout=60,

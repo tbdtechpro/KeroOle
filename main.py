@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Callable, List, Optional, Tuple
 
+from platform_utils import find_calibre_binary
+
 import bubblepy as tea
 import pygloss
 from pygloss import (
@@ -450,7 +452,7 @@ class CalibreAddWorker:
             self.program.send(CalibreAddProgressMsg(entry.book_id, "adding"))
             try:
                 result = subprocess.run(
-                    ["calibredb", "add", entry.epub_path],
+                    [find_calibre_binary("calibredb"), "add", entry.epub_path],
                     capture_output=True,
                     text=True,
                     timeout=120,
@@ -492,7 +494,7 @@ class CalibreWorker:
             try:
                 result = subprocess.run(
                     [
-                        "ebook-convert",
+                        find_calibre_binary("ebook-convert"),
                         book.epub_path,
                         out_path,
                         "--no-default-epub-cover",
@@ -718,13 +720,13 @@ class AppModel(tea.Model):
                     self.cookie_input = msg.text
                     self.cookie_status = f"ok:{len(msg.text)} chars read from clipboard — press Enter to save."
                 else:
-                    self.cookie_status = "error:Could not read clipboard. Install xclip, xsel, or wl-paste."
+                    self.cookie_status = "error:Could not read clipboard."
             elif self.screen == Screen.ADD_BOOK:
                 if msg.text:
                     self.book_id_input = msg.text.strip()
                     self.add_book_status = ""
                 else:
-                    self.add_book_status = "error:Could not read clipboard. Install xclip, xsel, or wl-paste."
+                    self.add_book_status = "error:Could not read clipboard."
             return self, None
 
         return self, None
@@ -1042,45 +1044,23 @@ class AppModel(tea.Model):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _read_clipboard(self):
-        """Read clipboard content via system tools and deliver as ClipboardMsg."""
+        """Read clipboard content via pyperclip and deliver as ClipboardMsg."""
         self.cookie_status = "ok:Reading clipboard…"
-
-        def _worker():
-            _cmds = [
-                ["wl-paste", "--no-newline"],
-                ["xclip", "-selection", "clipboard", "-o"],
-                ["xsel", "--clipboard", "--output"],
-            ]
-            for cmd in _cmds:
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0 and result.stdout.strip():
-                        self._program.send(ClipboardMsg(result.stdout.strip()))
-                        return
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    continue
-            self._program.send(ClipboardMsg(""))
-
-        threading.Thread(target=_worker, daemon=True).start()
+        self._read_clipboard_impl()
 
     def _read_clipboard_book(self):
         """Read clipboard content and deliver as ClipboardMsg for the add-book screen."""
-        def _worker():
-            _cmds = [
-                ["wl-paste", "--no-newline"],
-                ["xclip", "-selection", "clipboard", "-o"],
-                ["xsel", "--clipboard", "--output"],
-            ]
-            for cmd in _cmds:
-                try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                    if result.returncode == 0 and result.stdout.strip():
-                        self._program.send(ClipboardMsg(result.stdout.strip()))
-                        return
-                except (FileNotFoundError, subprocess.TimeoutExpired):
-                    continue
-            self._program.send(ClipboardMsg(""))
+        self._read_clipboard_impl()
 
+    def _read_clipboard_impl(self):
+        """Shared clipboard worker — sends ClipboardMsg("") on any failure."""
+        def _worker():
+            try:
+                import pyperclip
+                text = pyperclip.paste()
+                self._program.send(ClipboardMsg(text.strip() if text else ""))
+            except Exception:
+                self._program.send(ClipboardMsg(""))
         threading.Thread(target=_worker, daemon=True).start()
 
     def _cookie_age_mins(self) -> int:
@@ -1401,8 +1381,15 @@ class AppModel(tea.Model):
         lines.append(label_style.render("  1. DevTools (F12) → Network → any learning.oreilly.com request"))
         lines.append(label_style.render("  2. Headers → Request Headers → right-click Cookie → Copy value"))
         lines.append(label_style.render("  3. Press Ctrl+V to read from clipboard, then Enter to save"))
+        import sys as _sys
+        if _sys.platform == "win32":
+            _clip_cmd = "Get-Clipboard | python3 retrieve_cookies.py --stdin"
+        elif _sys.platform == "darwin":
+            _clip_cmd = "pbpaste | python3 retrieve_cookies.py --stdin"
+        else:
+            _clip_cmd = "xclip -o | python3 retrieve_cookies.py --stdin"
         lines.append(hint_style.render("  Tip: if Ctrl+V fails, use the CLI (most reliable for long cookies):"))
-        lines.append(hint_style.render("       xclip -o | python3 retrieve_cookies.py --stdin"))
+        lines.append(hint_style.render(f"       {_clip_cmd}"))
         lines.append("")
 
         # Input display — show last 60 chars + character count
@@ -1923,6 +1910,17 @@ class AppModel(tea.Model):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
+    try:
+        import colorama
+        colorama.just_fix_windows_console()
+    except AttributeError:
+        try:
+            colorama.init(strip=False)
+        except Exception:
+            pass
+    except ImportError:
+        pass
+
     model = AppModel()
     program = tea.Program(model, alt_screen=True)
     model._program = program  # back-reference so workers can send messages
@@ -1933,4 +1931,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

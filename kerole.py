@@ -49,10 +49,10 @@ class Display:
         datefmt="%d/%b/%Y %H:%M:%S"
     )
 
-    SH_DEFAULT = "\033[0m" if "win" not in sys.platform else ""  # TODO: colors for Windows
-    SH_YELLOW = "\033[33m" if "win" not in sys.platform else ""
-    SH_BG_RED = "\033[41m" if "win" not in sys.platform else ""
-    SH_BG_YELLOW = "\033[43m" if "win" not in sys.platform else ""
+    SH_DEFAULT   = "\033[0m"
+    SH_YELLOW    = "\033[33m"
+    SH_BG_RED    = "\033[41m"
+    SH_BG_YELLOW = "\033[43m"
 
     def __init__(
         self,
