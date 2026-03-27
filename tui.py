@@ -900,14 +900,14 @@ class AppModel(tea.Model):
         elif key in ("shift+tab", "up"):
             self.settings_cursor = (self.settings_cursor - 1) % n
             self.settings_status = ""
-        elif key == "enter" and self.settings_cursor < 4:
-            self._save_settings()
         elif self.settings_cursor == 3:
             # Toggle field — space/enter/left/right cycle between "title" and "id"
             if key in ("enter", " ", "left", "right", "h", "l"):
                 cur = self.settings_fields[3]
                 self.settings_fields[3] = "id" if cur == "title" else "title"
                 self.settings_status = ""
+        elif key == "enter" and self.settings_cursor < 4:
+            self._save_settings()
         elif self.settings_cursor < 4 and key in ("backspace", "delete"):
             val = self.settings_fields[self.settings_cursor]
             self.settings_fields[self.settings_cursor] = val[:-1]
@@ -953,8 +953,10 @@ class AppModel(tea.Model):
             db_path = exp_cfg.resolved_db_path() or _os.path.join(books_dir, "library.db")
             try:
                 reg = BookRegistry(db_path)
-                added = reg.scan_existing_books(books_dir)
-                reg.close()
+                try:
+                    added = reg.scan_existing_books(books_dir)
+                finally:
+                    reg.close()
                 self._program.send(LibraryScanDoneMsg(added=added))
             except Exception as exc:
                 self._program.send(LibraryScanDoneMsg(added=0, error=str(exc)))
@@ -970,8 +972,10 @@ class AppModel(tea.Model):
         db_path = exp_cfg.resolved_db_path() or _os.path.join(books_dir, "library.db")
         try:
             reg = BookRegistry(db_path)
-            reg.clear_chapter_db()
-            reg.close()
+            try:
+                reg.clear_chapter_db()
+            finally:
+                reg.close()
             self.settings_action_status = "ok:Chapter data cleared"
         except Exception as exc:
             self.settings_action_status = f"error:{exc}"

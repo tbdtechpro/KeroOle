@@ -275,10 +275,8 @@ class BookRegistry:
 
     def clear_chapter_db(self):
         """Truncate chapters and toc tables. Registry rows are preserved."""
-        self._conn.executescript("""
-            DELETE FROM chapters;
-            DELETE FROM toc;
-        """)
+        self._conn.execute("DELETE FROM chapters")
+        self._conn.execute("DELETE FROM toc")
         self._conn.commit()
 
     def _flatten_toc(self, book_id: str, entries: list, parent_id, play_order: list):
