@@ -450,6 +450,14 @@ class KeroOle:
         self.display.info("Downloading book images... (%s files)" % len(self.images), state=True)
         self.collect_images()
 
+        # Fill in author/publisher for v2 books where the API returns empty lists
+        if self.api_v2 and not self.book_info.get("authors"):
+            _authors, _publishers = self._extract_metadata_from_xhtml()
+            if _authors:
+                self.book_info["authors"] = _authors
+            if _publishers:
+                self.book_info["publishers"] = _publishers
+
         self.display.info("Creating EPUB file...", state=True)
         self.create_epub()
 
@@ -1081,6 +1089,99 @@ class KeroOle:
         # "self._start_multiprocessing" seems to cause problem. Switching to mono-thread download.
         for image_url in self.images:
             self._thread_download_images(image_url)
+
+    def _extract_metadata_from_xhtml(self) -> tuple:
+        """Scan the first 10 downloaded XHTML files for author/publisher metadata.
+
+        Used as a fallback when the v2 API returns empty authors/publishers.
+        Returns (authors, publishers) in book_info list format:
+            authors    = [{"name": "..."}, ...]
+            publishers = [{"name": "..."}, ...]
+        """
+        import re as _re
+        from lxml import html as lhtml
+
+        oebps = os.path.join(self.BOOK_PATH, "OEBPS")
+        authors: list = []
+        publishers: list = []
+
+        for ch in self.book_chapters[:10]:
+            fname = ch.get("filename", "")
+            if not fname:
+                continue
+            # Disk files use .xhtml; chapter list from v2 API may say .html
+            xhtml_fname = fname.replace(".html", ".xhtml")
+            fpath = os.path.join(oebps, xhtml_fname)
+            if not os.path.isfile(fpath):
+                continue
+
+            try:
+                with open(fpath, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                tree = lhtml.fromstring(content.encode("utf-8"))
+            except Exception:
+                continue
+
+            def _classes(el):
+                return el.get("class", "").split()
+
+            # ── Author extraction ─────────────────────────────────────────────
+            if not authors:
+                for el in tree.iter():
+                    cls = _classes(el)
+                    matched = (
+                        "author" in cls
+                        or "authorName" in cls
+                        or "bookAuthor" in cls
+                    )
+                    if not matched:
+                        continue
+                    text = (el.text_content() or "").strip()
+                    # Collapse whitespace, strip leading "by "
+                    text = _re.sub(r"\s+", " ", text).strip()
+                    text = _re.sub(r"^by\s+", "", text, flags=_re.IGNORECASE).strip()
+                    if text and len(text) < 120:
+                        authors.append({"name": text})
+                        break  # first match wins
+
+            # ── Publisher extraction ─────────────────────────────────────────
+            if not publishers:
+                # Pattern 1: class="publishername"
+                for el in tree.iter():
+                    if "publishername" in _classes(el):
+                        text = (el.text_content() or "").strip().rstrip(",").strip()
+                        if text and len(text) < 120:
+                            publishers.append({"name": text})
+                            break
+
+                # Pattern 2: "Published by ..." in copyright text
+                if not publishers:
+                    for el in tree.iter():
+                        cls = _classes(el)
+                        ep  = el.get("epub:type", "")
+                        if "copyright" not in cls and "copyright-page" not in ep:
+                            continue
+                        full_text = el.text_content() or ""
+                        m = _re.search(r"[Pp]ublished by\s+(.+)", full_text)
+                        if m:
+                            raw = m.group(1).strip()
+                            # Try to match up to a known corporate suffix (Inc., Ltd., LLC., etc.)
+                            suffix_m = _re.search(
+                                r"(.+?(?:,\s*(?:Inc|Ltd|LLC|Corp|Co)\.?))", raw
+                            )
+                            if suffix_m:
+                                name = suffix_m.group(1).strip()
+                            else:
+                                # Fall back: take everything up to the first comma
+                                name = raw.split(",")[0].strip()
+                            if name and len(name) < 120:
+                                publishers.append({"name": name})
+                                break
+
+            if authors and publishers:
+                break  # done — no need to scan more files
+
+        return authors, publishers
 
     def create_content_opf(self):
         self.css = next(os.walk(self.css_path))[2]
