@@ -1462,7 +1462,7 @@ class AppModel(tea.Model):
         # header + footer + scroll indicator.
         rows_available = max(3, self.height - 4)
         per_book = 3
-        visible_count = max(1, rows_available // per_book)
+        visible_count = min(12, max(1, rows_available // per_book))
 
         # Auto-scroll: keep the first in-progress book visible
         active_idx = None
