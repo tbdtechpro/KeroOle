@@ -1098,12 +1098,12 @@ class KeroOle:
             authors    = [{"name": "..."}, ...]
             publishers = [{"name": "..."}, ...]
         """
-        import re as _re
-        from lxml import html as lhtml
-
         oebps = os.path.join(self.BOOK_PATH, "OEBPS")
         authors: list = []
         publishers: list = []
+
+        def _classes(el):
+            return el.get("class", "").split()
 
         for ch in self.book_chapters[:10]:
             fname = ch.get("filename", "")
@@ -1118,12 +1118,9 @@ class KeroOle:
             try:
                 with open(fpath, encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                tree = lhtml.fromstring(content.encode("utf-8"))
+                tree = html.fromstring(content.encode("utf-8"))
             except Exception:
                 continue
-
-            def _classes(el):
-                return el.get("class", "").split()
 
             # ── Author extraction ─────────────────────────────────────────────
             if not authors:
@@ -1138,8 +1135,8 @@ class KeroOle:
                         continue
                     text = (el.text_content() or "").strip()
                     # Collapse whitespace, strip leading "by "
-                    text = _re.sub(r"\s+", " ", text).strip()
-                    text = _re.sub(r"^by\s+", "", text, flags=_re.IGNORECASE).strip()
+                    text = re.sub(r"\s+", " ", text).strip()
+                    text = re.sub(r"^by\s+", "", text, flags=re.IGNORECASE).strip()
                     if text and len(text) < 120:
                         authors.append({"name": text})
                         break  # first match wins
@@ -1162,11 +1159,11 @@ class KeroOle:
                         if "copyright" not in cls and "copyright-page" not in ep:
                             continue
                         full_text = el.text_content() or ""
-                        m = _re.search(r"[Pp]ublished by\s+(.+)", full_text)
+                        m = re.search(r"[Pp]ublished by\s+(.+)", full_text)
                         if m:
                             raw = m.group(1).strip()
                             # Try to match up to a known corporate suffix (Inc., Ltd., LLC., etc.)
-                            suffix_m = _re.search(
+                            suffix_m = re.search(
                                 r"(.+?(?:,\s*(?:Inc|Ltd|LLC|Corp|Co)\.?))", raw
                             )
                             if suffix_m:
