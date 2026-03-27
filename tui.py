@@ -142,6 +142,12 @@ class CalibreAddDoneMsg(tea.Msg):
 
 
 @dataclass
+class LibraryScanDoneMsg(tea.Msg):
+    added: int
+    error: str = ""
+
+
+@dataclass
 class LoginResultMsg(tea.Msg):
     cookies: dict
     error: str = ""
@@ -580,6 +586,8 @@ class AppModel(tea.Model):
         ]
         self.settings_cursor: int = 0   # which field is focused
         self.settings_status: str = ""
+        self.settings_action_status: str = ""   # "ok:..." or "error:..."
+        self.settings_scanning: bool = False
 
         # calibre sync screen
         self.sync_scanning: bool       = False
@@ -670,6 +678,14 @@ class AppModel(tea.Model):
         if isinstance(msg, CalibreAddDoneMsg):
             self.sync_adding   = False
             self.sync_all_done = True
+            return self, None
+
+        if isinstance(msg, LibraryScanDoneMsg):
+            self.settings_scanning = False
+            if msg.error:
+                self.settings_action_status = f"error:{msg.error}"
+            else:
+                self.settings_action_status = f"ok:{msg.added} book(s) added to registry"
             return self, None
 
         if isinstance(msg, LoginResultMsg):
@@ -874,7 +890,7 @@ class AppModel(tea.Model):
         return self, None
 
     def _key_settings(self, key: str):
-        n = len(self.settings_fields)
+        n = 6  # 4 editable fields + 2 action buttons
         if key == "escape":
             self.screen = Screen.MAIN
             self.settings_status = ""
@@ -884,7 +900,7 @@ class AppModel(tea.Model):
         elif key in ("shift+tab", "up"):
             self.settings_cursor = (self.settings_cursor - 1) % n
             self.settings_status = ""
-        elif key == "enter":
+        elif key == "enter" and self.settings_cursor < 4:
             self._save_settings()
         elif self.settings_cursor == 3:
             # Toggle field — space/enter/left/right cycle between "title" and "id"
@@ -892,16 +908,20 @@ class AppModel(tea.Model):
                 cur = self.settings_fields[3]
                 self.settings_fields[3] = "id" if cur == "title" else "title"
                 self.settings_status = ""
-        elif key in ("backspace", "delete"):
+        elif self.settings_cursor < 4 and key in ("backspace", "delete"):
             val = self.settings_fields[self.settings_cursor]
             self.settings_fields[self.settings_cursor] = val[:-1]
             self.settings_status = ""
-        elif key == "ctrl+u":
+        elif self.settings_cursor < 4 and key == "ctrl+u":
             self.settings_fields[self.settings_cursor] = ""
             self.settings_status = ""
-        elif len(key) == 1 and key.isprintable():
+        elif self.settings_cursor < 4 and len(key) == 1 and key.isprintable():
             self.settings_fields[self.settings_cursor] += key
             self.settings_status = ""
+        elif self.settings_cursor == 4 and key == "enter":
+            self._run_scan_library()
+        elif self.settings_cursor == 5 and key == "enter":
+            self._run_clear_chapter_db()
         return self, None
 
     def _save_settings(self):
@@ -917,6 +937,44 @@ class AppModel(tea.Model):
             self.settings_status = "ok:Settings saved to ~/.kerole.toml"
         except Exception as exc:
             self.settings_status = f"error:Save failed — {exc}"
+
+    def _run_scan_library(self):
+        if self.settings_scanning:
+            return
+        self.settings_scanning = True
+        self.settings_action_status = "ok:Scanning…"
+
+        def _worker():
+            import os as _os
+            from config import load_export_config
+            from library import BookRegistry
+            books_dir = _os.path.join(PATH, "Books")
+            exp_cfg = load_export_config()
+            db_path = exp_cfg.resolved_db_path() or _os.path.join(books_dir, "library.db")
+            try:
+                reg = BookRegistry(db_path)
+                added = reg.scan_existing_books(books_dir)
+                reg.close()
+                self._program.send(LibraryScanDoneMsg(added=added))
+            except Exception as exc:
+                self._program.send(LibraryScanDoneMsg(added=0, error=str(exc)))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _run_clear_chapter_db(self):
+        import os as _os
+        from config import load_export_config
+        from library import BookRegistry
+        books_dir = _os.path.join(PATH, "Books")
+        exp_cfg = load_export_config()
+        db_path = exp_cfg.resolved_db_path() or _os.path.join(books_dir, "library.db")
+        try:
+            reg = BookRegistry(db_path)
+            reg.clear_chapter_db()
+            reg.close()
+            self.settings_action_status = "ok:Chapter data cleared"
+        except Exception as exc:
+            self.settings_action_status = f"error:{exc}"
 
     # ── Business logic ─────────────────────────────────────────────────────
 
@@ -1443,7 +1501,7 @@ class AppModel(tea.Model):
             return f"  {marker} {label}"
 
         lines.append(_toggle("[m] Markdown export", self.export_markdown))
-        lines.append(_toggle("[d] Content DB",      self.export_db))
+        lines.append(_toggle("[d] Chapter Content DB", self.export_db))
         lines.append(_toggle("[x] RAG JSONL",       self.export_rag))
         lines.append(_toggle("[k] Skip if downloaded", self.skip_if_downloaded))
         lines.append("")
@@ -1619,6 +1677,31 @@ class AppModel(tea.Model):
         lines.append(hint_style.render("  ↳ How export subfolders are named — by book title or numeric book ID"))
         lines.append("")
 
+        # Action buttons
+        scan_focused  = self.settings_cursor == 4
+        clear_focused = self.settings_cursor == 5
+
+        def _action_btn(label: str, focused: bool, scanning: bool = False) -> str:
+            lbl = (accent_style if focused else label_style).render(label)
+            hint = hint_style.render("  [Enter to run]") if focused else ""
+            spinner = Style().foreground(C_YELLOW).render(" ⟳") if scanning else ""
+            return lbl + spinner + hint
+
+        lines.append(_action_btn("Scan Library",      scan_focused,  self.settings_scanning))
+        lines.append(hint_style.render("  ↳ Populate the download registry from existing Books/ folders"))
+        lines.append("")
+        lines.append(_action_btn("Clear Chapter DB", clear_focused))
+        lines.append(hint_style.render("  ↳ Remove stored chapter XHTML/TOC data (registry is preserved)"))
+        lines.append("")
+
+        if self.settings_action_status:
+            kind, _, msg = self.settings_action_status.partition(":")
+            if kind == "ok":
+                lines.append(success_style.render("✓ " + msg))
+            else:
+                lines.append(error_style.render("✗ " + msg))
+            lines.append("")
+
         if self.settings_status:
             kind, _, msg = self.settings_status.partition(":")
             if kind == "ok":
@@ -1627,7 +1710,7 @@ class AppModel(tea.Model):
                 lines.append(error_style.render("✗ " + msg))
             lines.append("")
 
-        lines.append(self._footer("Tab/↓  next field    Enter  save    Ctrl+U  clear    Space  toggle    Esc  back"))
+        lines.append(self._footer("Tab/↓  next    Enter  save/run    Ctrl+U  clear    Space  toggle    Esc  back"))
         content = "\n".join(lines)
         return panel_style.width(min(self.width - 4, 68)).render(content)
 

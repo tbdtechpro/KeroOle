@@ -273,6 +273,14 @@ class BookRegistry:
         self._flatten_toc(book_id, toc_data, parent_id=None, play_order=play_order)
         self._conn.commit()
 
+    def clear_chapter_db(self):
+        """Truncate chapters and toc tables. Registry rows are preserved."""
+        self._conn.executescript("""
+            DELETE FROM chapters;
+            DELETE FROM toc;
+        """)
+        self._conn.commit()
+
     def _flatten_toc(self, book_id: str, entries: list, parent_id, play_order: list):
         for entry in entries:
             play_order[0] += 1
