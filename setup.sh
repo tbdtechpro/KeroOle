@@ -137,19 +137,21 @@ if sys.version_info < (3, 11):
 ###############################################################################
 
 info "Upgrading pip…"
-pip install --quiet --upgrade pip
+python -m pip install --quiet --upgrade pip
 
 info "Installing core Python dependencies…"
-pip install --quiet \
+python -m pip install --quiet \
     "lxml>=4.9.0" \
     "requests>=2.28.0" \
-    "browser_cookie3"
+    "browser_cookie3" \
+    "pyperclip>=1.8.0" \
+    "colorama>=0.4.6"
 
 info "Installing bubblepy (tbdtechpro fork)…"
-pip install --quiet "git+https://github.com/tbdtechpro/bubblepy"
+python -m pip install --quiet "git+https://github.com/tbdtechpro/bubblepy"
 
 info "Installing pygloss (tbdtechpro fork)…"
-pip install --quiet "git+https://github.com/tbdtechpro/pygloss"
+python -m pip install --quiet "git+https://github.com/tbdtechpro/pygloss"
 
 success "All Python dependencies installed."
 
@@ -164,7 +166,7 @@ import importlib.util
 import sys
 
 missing = []
-for pkg in ("lxml", "requests", "browser_cookie3", "bubblepy", "pygloss"):
+for pkg in ("lxml", "requests", "browser_cookie3", "pyperclip", "colorama", "bubblepy", "pygloss"):
     if importlib.util.find_spec(pkg) is None:
         missing.append(pkg)
 
