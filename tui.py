@@ -869,7 +869,8 @@ class AppModel(tea.Model):
 
     def _key_calibre(self, key: str):
         if self.all_calibre_done and key in ("q", "enter", "escape"):
-            return self, tea.quit_cmd
+            self.screen = Screen.MAIN
+            return self, None
         return self, None
 
     def _key_settings(self, key: str):
@@ -1547,7 +1548,7 @@ class AppModel(tea.Model):
         if self.all_calibre_done:
             lines.append(success_style.render("  All done!"))
             lines.append("")
-            lines.append(self._footer("Enter/q  quit"))
+            lines.append(self._footer("Enter/Esc/q  back to menu    Ctrl+C  quit"))
         else:
             lines.append(self._footer("Ctrl+C  cancel"))
 
