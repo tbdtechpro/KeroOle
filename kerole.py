@@ -1009,6 +1009,19 @@ class KeroOle:
                     )
                     self.display.book_ad_info = 2
 
+                # When skipping the first chapter, recover self.cover from the saved file
+                # so the fallback default_cover path isn't triggered on retry downloads.
+                if first_page and not self.cover:
+                    fpath = os.path.join(self.BOOK_PATH, "OEBPS", self.filename.replace(".html", ".xhtml"))
+                    try:
+                        with open(fpath, encoding="utf-8", errors="replace") as _f:
+                            _existing = html.fromstring(_f.read())
+                        _found = self.get_cover(_existing)
+                        if _found is not None:
+                            self.cover = _found.attrib["src"]
+                    except Exception:
+                        pass
+
             else:
                 self.save_page_html(self.parse_html(self.get_html(next_chapter["content"]), first_page))
 
@@ -1124,7 +1137,7 @@ class KeroOle:
             try:
                 with open(fpath, encoding="utf-8", errors="replace") as f:
                     content = f.read()
-                tree = html.fromstring(content.encode("utf-8"))
+                tree = html.fromstring(content)
             except Exception:
                 continue
 
