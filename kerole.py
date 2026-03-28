@@ -512,7 +512,9 @@ class KeroOle:
             return 0
 
         if response.is_redirect and perform_redirect:
-            return self.requests_provider(response.next.url, is_post, None, perform_redirect)
+            location = response.headers.get("Location")
+            if location:
+                return self.requests_provider(urljoin(str(url), location), is_post, None, perform_redirect)
             # TODO How about **kwargs?
 
         return response
@@ -1027,6 +1029,7 @@ class KeroOle:
             response = self.requests_provider(url)
             if response == 0:
                 self.display.error("Error trying to retrieve this CSS: %s\n    From: %s" % (css_file, url))
+                return
 
             with open(css_file, 'wb') as s:
                 s.write(response.content)
