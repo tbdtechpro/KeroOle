@@ -45,6 +45,12 @@ LOGIN_ENTRY_URL = SAFARI_BASE_URL + "/login/"
 USE_PROXY = False
 PROXIES = {"https": "https://127.0.0.1:8080"}
 
+# Default request timeout: (connect_seconds, read_seconds).
+# The read_timeout applies per-chunk for streaming responses (iter_content),
+# so a stalled image download will raise ReadTimeout after this many seconds
+# with no new data received.
+DOWNLOAD_TIMEOUT = (15, 45)
+
 
 class Display:
     BASE_FORMAT = logging.Formatter(
@@ -487,6 +493,7 @@ class KeroOle:
                 self.session.cookies.set(cookie_key, cookie_value)
 
     def requests_provider(self, url, is_post=False, data=None, perform_redirect=True, **kwargs):
+        kwargs.setdefault('timeout', DOWNLOAD_TIMEOUT)
         try:
             response = getattr(self.session, "post" if is_post else "get")(
                 url,
@@ -1343,7 +1350,6 @@ class KeroOle:
         books_dir = os.path.join(PATH, "Books")
 
         do_registry = True  # always record downloads
-        do_markdown = getattr(args, "export_markdown", False)
         do_db = getattr(args, "export_db", False)
         do_rag = getattr(args, "export_rag", False)
 
@@ -1354,6 +1360,11 @@ class KeroOle:
         # Load user-configured paths (falls back to defaults when not set)
         from config import book_folder_name, load_export_config
         exp_cfg = load_export_config()
+
+        # GFM markdown: per-run arg (legacy --export-markdown / TUI toggle) or config
+        do_markdown = getattr(args, "export_markdown", False) or exp_cfg.markdown_gfm
+        # Obsidian markdown: per-run arg (TUI toggle) or persistent config
+        do_obsidian = getattr(args, "export_obsidian", False) or exp_cfg.markdown_obsidian
         db_path = exp_cfg.resolved_db_path() or os.path.join(books_dir, "library.db")
         folder  = book_folder_name(self.book_info, self.book_id, exp_cfg.folder_name_style)
 
@@ -1377,7 +1388,8 @@ class KeroOle:
         if do_markdown:
             from exporters import MarkdownExporter
             self.display.info("Exporting Markdown...", state=True)
-            md_output_dir = exp_cfg.resolved_markdown_dir()
+            # GFM dir takes precedence; fall back to legacy markdown_dir, then per-book default
+            md_output_dir = exp_cfg.resolved_markdown_gfm_dir() or exp_cfg.resolved_markdown_dir()
             exporter = MarkdownExporter(
                 book_id=self.book_id,
                 book_path=self.BOOK_PATH,
@@ -1388,6 +1400,22 @@ class KeroOle:
             )
             markdown_map = exporter.export()
             self.display.info("Markdown export complete: %s" % exporter.md_dir)
+
+        # Feature 2b — Obsidian Markdown export
+        if do_obsidian:
+            from exporters import ObsidianExporter
+            self.display.info("Exporting Obsidian Markdown...", state=True)
+            obs_output_dir = exp_cfg.resolved_markdown_obsidian_dir()
+            obs_exporter = ObsidianExporter(
+                book_id=self.book_id,
+                book_path=self.BOOK_PATH,
+                book_info=self.book_info,
+                chapters=self.book_chapters,
+                output_dir=obs_output_dir,
+                folder_name=folder,
+            )
+            obs_exporter.export()
+            self.display.info("Obsidian export complete: %s" % obs_exporter.md_dir)
 
         # Feature 3 — Content DB
         if do_db:

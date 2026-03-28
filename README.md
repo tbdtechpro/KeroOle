@@ -1,10 +1,11 @@
 # KeroOle
 
-Download and generate *EPUB* files from your [O'Reilly Learning](https://learning.oreilly.com) library subscription.
+<!-- Logo placeholder — coming soon -->
+
+Download and export ebooks from your [O'Reilly Learning](https://learning.oreilly.com) subscription. Produces EPUB, GFM Markdown, Obsidian Markdown, RAG JSONL, and a searchable SQLite library — all from an interactive terminal UI.
 
 > **Note:** KeroOle is a maintained fork of [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks).
-> Credit and thanks to Lorenzo Di Fuccia for the original implementation.
-> This fork adds email/password login, a v2 API fallback, an interactive TUI, and several export features.
+> Credit and thanks to Lorenzo Di Fuccia for the original download pipeline and EPUB assembly.
 
 *For personal and educational use only. Please read the O'Reilly [Terms of Service](https://learning.oreilly.com/terms/) before use.*
 
@@ -14,239 +15,221 @@ Download and generate *EPUB* files from your [O'Reilly Learning](https://learnin
 
 | Platform | Status | Notes |
 |---|---|---|
-| **Linux** | Supported | Primary development and test platform (Ubuntu 24.04) |
-| **Windows** | Experimental — partially tested | TUI renders correctly; clipboard and Calibre conversion not yet verified end-to-end. Windows build script included. |
-| **macOS** | Experimental — untested | Build script included; no test results yet. |
+| **Linux** | Supported | Primary development platform (Ubuntu 24.04) |
+| **Windows** | Experimental — partially tested | TUI renders correctly; clipboard and Calibre conversion not yet verified end-to-end |
+| **macOS** | Experimental — untested | Build script included; no test results yet |
 
 ---
 
-## Overview
+## Contents
 
 - [Requirements & Setup](#requirements--setup)
 - [Authentication](#authentication)
-- [Usage — Interactive TUI](#usage--interactive-tui)
-- [Usage — CLI](#usage--cli)
+- [TUI Overview](#tui-overview)
 - [Export Features](#export-features)
-- [Calibre EPUB Conversion](#calibre-epub-conversion)
+- [Configuration](#configuration)
+- [Library Management](#library-management)
+- [Calibre Integration](#calibre-integration)
 - [Standalone Executable](#standalone-executable)
-- [Examples](#examples)
+- [Credits & License](#credits--license)
 
 ---
 
 ## Requirements & Setup
 
-**Python 3.10+** is required.
+**Python 3.10+** and **[Calibre](https://calibre-ebook.com/)** are required.
 
 ### Linux (Ubuntu / Debian)
-
-Run the included setup script to create a virtual environment and install all dependencies:
 
 ```bash
 git clone https://github.com/tbdtechpro/KeroOle.git
 cd KeroOle/
 chmod +x setup.sh
 ./setup.sh
-```
-
-The setup script:
-1. Verifies your platform (targets Ubuntu 24.04, warns on others)
-2. Installs system packages via `apt-get` (Python 3, build tools, Calibre)
-3. Creates a `.venv` virtual environment
-4. Installs Python dependencies (`lxml`, `requests`, `browser_cookie3`, `bubblepy`, `pygloss`)
-
-After setup, activate the environment:
-
-```bash
 source .venv/bin/activate
+python main.py
 ```
+
+The setup script installs system packages (Python 3, build tools, Calibre), creates a `.venv`, and installs all Python dependencies.
 
 ### Windows (experimental)
 
-See [Standalone Executable](#standalone-executable) for a one-step build. Or to run from source:
+See [Standalone Executable](#standalone-executable) for the easiest path. To run from source:
 
 ```powershell
 pip install lxml requests browser_cookie3 pyperclip colorama
-# Clone and install bubblepy and pygloss from https://github.com/tbdtechpro/bubblepy
+# Install bubblepy and pygloss from https://github.com/tbdtechpro/bubblepy
 # and https://github.com/tbdtechpro/pygloss via `pip install -e .`
 python main.py
 ```
 
 ### macOS (experimental — untested)
 
-See [Standalone Executable](#standalone-executable) for a one-step build. Or to run from source:
-
 ```bash
 pip3 install lxml requests browser_cookie3 pyperclip colorama
-# Clone and install bubblepy and pygloss from https://github.com/tbdtechpro/bubblepy
-# and https://github.com/tbdtechpro/pygloss via `pip install -e .`
+# Install bubblepy and pygloss as above
 python3 main.py
 ```
-
-**Python dependencies** (see `requirements.txt`):
-```
-lxml>=4.9.0
-requests>=2.28.0
-browser_cookie3
-```
-Plus `bubblepy` and `pygloss` (tbdtechpro forks) for the TUI.
 
 ---
 
 ## Authentication
 
-This fork supports two authentication methods:
+KeroOle requires an active O'Reilly Learning subscription. Two methods work:
 
-### Option 1 — Email & Password (recommended)
+### Option 1 — Extract Cookies from Browser (recommended)
 
-Pass credentials directly on the command line:
+Sign in to [learning.oreilly.com](https://learning.oreilly.com) in Chrome, Firefox, or Edge, then select **"Extract Cookies from Browser"** in the KeroOle main menu. Cookies are saved to `cookies.json` automatically and reused until the session expires.
 
-```bash
-python kerole.py --cred "account@example.com:MyPassword" BOOKID
-```
+This works for all login methods including SSO and Google login.
 
-Or use `--login` to be prompted interactively (safer — password not visible in shell history):
+### Option 2 — Paste Session Cookie Manually
 
-```bash
-python kerole.py --login BOOKID
-```
+If browser extraction fails, copy the session cookie from your browser's DevTools:
 
-Session cookies are saved to `cookies.json` automatically. On subsequent runs you can omit credentials until the session expires.
+1. Open DevTools → Network → any request to `learning.oreilly.com`
+2. Copy the `Cookie:` header value
+3. Select **"Set Session Cookie (paste)"** in KeroOle and paste it
 
-### Option 2 — Cookie from Browser (SSO / company login)
+> **Security note:** Anyone with access to `cookies.json` can use your O'Reilly session. Keep the file private.
 
-If you authenticate via SSO, Google, or a company portal, log in via your browser, then copy the session cookie string and save it:
-
-```bash
-# From DevTools → Network → any request → Copy "Cookie" header value
-python retrieve_cookies.py --cookie "orm-jwt=eyJ...; orm-rt=..."
-
-# Or paste interactively
-python retrieve_cookies.py --cookie
-```
-
-The TUI also has a dedicated cookie input screen.
-
-```bash
-# Auto-extract from browser (may not work on modern Chrome due to OS encryption)
-python retrieve_cookies.py
-```
-
-> **Security note:** Anyone with access to `cookies.json` can use your session. Use `--no-cookies` if on a shared machine.
+> **Note:** Email/password login is present in the menu but is currently non-functional due to changes in the O'Reilly authentication flow. Use one of the cookie methods above.
 
 ---
 
-## Usage — Interactive TUI
+## TUI Overview
 
-Launch the terminal UI for a menu-driven experience:
+Launch the terminal UI:
 
 ```bash
 python main.py
+# or, if using the standalone build:
+./KeroOle
 ```
 
-The TUI provides:
-- **Login** — email/password login flow
-- **Set Cookie** — paste your browser session cookie
-- **Add Book to Queue** — queue multiple books for batch download
-- **View / Run Queue** — manage the queue with export toggles:
-  - `m` — toggle Markdown export
-  - `d` — toggle Content DB storage
-  - `x` — toggle RAG JSONL export
-  - `k` — toggle skip-if-downloaded
-  - `r` — run all downloads
-
----
-
-## Usage — CLI
-
-```bash
-python kerole.py [OPTIONS] <BOOK ID>
-```
-
-The Book ID is the number in the O'Reilly URL:
-`https://learning.oreilly.com/library/view/book-name/XXXXXXXXXXXXX/`
-
-### All Options
+### Main Menu
 
 ```
-usage: kerole.py [--cred <EMAIL:PASS> | --login] [--no-cookies]
-                      [--kindle] [--preserve-log]
-                      [--skip-if-downloaded] [--scan-library]
-                      [--export-markdown] [--export-db] [--export-rag]
-                      [--help]
-                      <BOOK ID>
-
-positional arguments:
-  <BOOK ID>             Book ID from the O'Reilly URL.
-
-options:
-  --cred <EMAIL:PASS>   Email and password for login.
-  --login               Prompt for credentials interactively.
-  --no-cookies          Do not save session to cookies.json.
-  --kindle              Add CSS rules for Kindle compatibility
-                        (blocks overflow on table/pre elements).
-  --preserve-log        Keep the info log file even on success.
-  --skip-if-downloaded  Skip download if the book is already in
-                        the local library registry (library.db).
-  --scan-library        Scan existing Books/ directories and
-                        populate library.db, then exit.
-  --export-markdown     Write GFM Markdown to Books/{title}/markdown/.
-  --export-db           Store chapter XHTML and TOC in library.db.
-  --export-rag          Write heading-chunked JSONL to
-                        Books/{title}/rag/{book_id}_rag.jsonl.
-                        Implies --export-db.
-  --help                Show this help message.
+  KeroOle
+  ─────────────────────────
+  Extract Cookies from Browser
+  Set Session Cookie (paste)
+  Search O'Reilly
+  Add Book to Queue
+  View / Run Queue
+  Browse Library
+  Sync with Calibre Library
+  Export Paths / Settings
+  Quit
 ```
+
+### Searching
+
+**Search O'Reilly** opens a two-phase search UI:
+
+- Enter a query, optionally filter by format (`books` / `videos` / `all`), topic, or publisher
+- Toggle sort between relevance and newest
+- `[` / `]` pages through results
+- `Space` to add books to the download queue
+- `r` / `Enter` to confirm and go to the queue
+
+### Downloading
+
+**Add Book to Queue** accepts book IDs (the number in the O'Reilly URL) one at a time. Paste multiple IDs line by line.
+
+**View / Run Queue** shows queued books with export toggles:
+
+| Key | Toggle |
+|---|---|
+| `g` | GFM Markdown export |
+| `o` | Obsidian Markdown export |
+| `d` | Content DB storage |
+| `x` | RAG JSONL export |
+| `k` | Skip if already downloaded |
+| `r` | Run all downloads |
+
+Progress is shown per-book with chapter count and download percentage. Books that fail during download are listed in a summary at the end.
+
+### Library Browse
+
+**Browse Library** lists all books in your local registry with status badges:
+
+```
+  [DB] [MD]  AI Engineering                   2024  Chip Huyen
+  [DB]       The Kubernetes Book               2024  Nigel Poulton
+             Node.js for Beginners            2024  ...
+```
+
+- `Space` — toggle selection
+- `a` — select / deselect all
+- `e` — export selected books
+- `A` — export all books
+- `/` — filter by title
 
 ---
 
 ## Export Features
 
-All outputs land in `Books/{book-title}/` alongside the EPUB.
+All outputs are stored under `Books/{book-title}/` next to the downloaded EPUB. Output paths can be overridden globally in Settings.
 
-### Library Registry (`library.db`)
+### EPUB
 
-Every download is automatically recorded in `Books/library.db` (SQLite). Fields include title, authors, ISBN, sha256 of the EPUB, chapter count, and API version used.
+Every download produces a standards-compliant EPUB at `Books/{title}/{book_id}.epub`. After download, Calibre conversion runs automatically (when Calibre is installed), producing `{book_id}_calibre.epub` with improved reader compatibility.
 
-```bash
-# Populate registry from existing Books/ directories (no network needed)
-python kerole.py --scan-library
+### GFM Markdown
 
-# Skip re-downloading a book already in the registry
-python kerole.py --skip-if-downloaded BOOKID
-
-# Inspect the registry
-sqlite3 Books/library.db "SELECT title, chapter_count, downloaded_at FROM registry"
-```
-
-### Markdown Export (`--export-markdown`)
-
-Converts each chapter's XHTML to [GitHub Flavored Markdown](https://github.github.com/gfm/):
+Each chapter is exported as GitHub Flavored Markdown under `Books/{title}/markdown/`:
 
 ```
-Books/{title}/
-└── markdown/
-    ├── images/       (copied from OEBPS/Images/)
-    ├── ch01.md
-    ├── ch02.md
-    └── _book.md      (all chapters combined)
+Books/{title}/markdown/
+├── images/
+├── ch01.md
+├── ch02.md
+└── _book.md      ← all chapters combined
 ```
 
-Handles headings, code blocks, tables, lists, links, images, figures, and O'Reilly-specific `data-type` elements.
+Images without `alt` text automatically get alt text derived from the filename.
+
+Enable: toggle `g` in the Queue screen, or set `markdown_gfm = true` in `~/.kerole.toml`.
+
+### Obsidian Markdown
+
+A second Markdown export optimized for [Obsidian](https://obsidian.md) vaults:
+
+- **YAML frontmatter** on every chapter file (title, authors, publisher, tags, source URL)
+- **`![[filename]]` image embeds** (Obsidian wiki-style)
+- **`> [!note]` / `> [!tip]` / `> [!warning]` callouts** from O'Reilly `data-type` elements
+- **`[[chapter-stem|Title]]` wiki-links** for cross-chapter references — shows as graph edges in Obsidian
+- **`_book.md` MOC (Map of Content)** index note linking all chapters — creates a hub node in the graph
+
+Set `markdown_obsidian_dir` in Settings to your vault root and KeroOle will write directly into it.
+
+Enable: toggle `o` in the Queue screen, or set `markdown_obsidian = true` in `~/.kerole.toml`.
 
 ### Content DB (`--export-db`)
 
-Stores raw XHTML and converted Markdown for every chapter, plus a flattened TOC, in `library.db`:
+Stores raw XHTML and converted Markdown for every chapter, plus a flattened TOC, in `Books/library.db` (SQLite):
 
 ```bash
 sqlite3 Books/library.db ".tables"
-# registry  chapters  toc
+# chapters  chapters_fts  registry  toc
 
-sqlite3 Books/library.db "SELECT title, markdown_text FROM chapters WHERE book_id='BOOKID' LIMIT 1"
+sqlite3 Books/library.db \
+  "SELECT title, markdown_text FROM chapters WHERE book_id='9781098166298' LIMIT 1"
+```
+
+A **FTS5 full-text search index** (`chapters_fts`) is maintained automatically. Search across all downloaded chapters:
+
+```sql
+SELECT book_id, title, snippet(chapters_fts, 2, '[', ']', '…', 64) AS excerpt
+FROM chapters_fts
+WHERE chapters_fts MATCH 'transformer attention'
+ORDER BY rank LIMIT 20;
 ```
 
 ### RAG JSONL Export (`--export-rag`)
 
-Produces a heading-chunked JSONL file for use with retrieval-augmented generation (RAG) pipelines. Each record is a chunk with full provenance:
+Heading-chunked JSONL for retrieval-augmented generation pipelines:
 
 ```json
 {
@@ -264,50 +247,95 @@ Produces a heading-chunked JSONL file for use with retrieval-augmented generatio
 }
 ```
 
-Output path: `Books/{title}/rag/{book_id}_rag.jsonl`
+Output: `Books/{title}/rag/{book_id}_rag.jsonl`. Implies `--export-db`.
 
-`--export-rag` implies `--export-db`.
+---
 
-### Full Export Example
+## Configuration
+
+KeroOle stores user configuration in `~/.kerole.toml`. Edit directly or use the **Export Paths / Settings** screen in the TUI.
+
+```toml
+[exports]
+# Output directories (blank = default inside each book's Books/ folder)
+markdown_gfm_dir      = ""        # e.g. "~/Documents/Books/MD"
+markdown_obsidian_dir = ""        # e.g. "~/Documents/ObsidianVault"
+rag_dir               = ""        # e.g. "~/Documents/Books/RAG"
+db_path               = ""        # e.g. "~/Documents/Books/library.db"
+
+# Folder naming: "title" (default) or "id" (numeric book ID)
+folder_name_style = "title"
+
+# Enable export formats automatically on every download
+markdown_gfm      = false
+markdown_obsidian = false
+
+# After Calibre conversion, delete the pre-conversion EPUB
+delete_original_epub = false
+```
+
+All paths support `~` expansion.
+
+---
+
+## Library Management
+
+### Scan Existing Books
+
+If you have Books already downloaded (or migrated from a previous install), populate the registry without re-downloading:
+
+In the TUI: **Export Paths / Settings** → **Scan Library**
+
+Or from the command line:
+```bash
+python kerole.py --scan-library
+```
+
+### Full-Text Search (SQLite)
+
+The `chapters_fts` FTS5 virtual table enables full-text search across all downloaded chapter content. Rebuild the index after adding books outside KeroOle:
+
+```sql
+INSERT INTO chapters_fts(chapters_fts) VALUES('rebuild');
+```
+
+### Cleanup Script
+
+After Calibre conversion, remove original pre-conversion EPUBs where a `_calibre.epub` already exists:
 
 ```bash
-python kerole.py \
-  --cred "account@example.com:password" \
-  --export-markdown \
-  --export-db \
-  --export-rag \
-  9781098166298
+# Preview what would be deleted
+./cleanup_original_epubs.sh --dry-run
+
+# Delete
+./cleanup_original_epubs.sh
 ```
 
 ---
 
-## Calibre EPUB Conversion
+## Calibre Integration
 
-The generated EPUB is a raw extraction. For best E-Reader compatibility, convert with [Calibre](https://calibre-ebook.com/):
+[Calibre](https://calibre-ebook.com/) is used for two things:
 
-```bash
-ebook-convert "Books/My Book (9781234567890)/9781234567890.epub" \
-              "Books/My Book (9781234567890)/9781234567890_clean.epub"
-```
+### 1. EPUB Post-Processing
 
-Or use the included helper (converts all EPUBs in your Books directory):
+After each download, KeroOle runs `ebook-convert` to produce a clean, reader-compatible EPUB (`{book_id}_calibre.epub`). The TUI shows conversion progress per-book.
+
+To convert books that were downloaded before this was added:
 
 ```bash
 python calibre_convert.py Books/*/*.epub
 ```
 
-For Kindle, use `--kindle` when downloading, then convert to AZW3 or MOBI:
+### 2. Sync with Calibre Library
 
-```bash
-python kerole.py --kindle BOOKID
-# Then in Calibre: select "Ignore margins" in conversion options
-```
+**Sync with Calibre Library** in the TUI scans your local `Books/` folder and your Calibre library, then shows unsynced books. Select books with `Space` and press `Enter` to add them to Calibre.
 
 ---
 
 ## Standalone Executable
 
-A self-contained executable can be built from source using the included build scripts. No Python installation required on the target machine after building.
+Build a self-contained binary (no Python required on the target machine):
 
 ### Linux
 
@@ -316,13 +344,11 @@ chmod +x build-linux.sh
 ./build-linux.sh
 ```
 
-### Windows (experimental — partially tested)
+### Windows (experimental)
 
 ```powershell
 .\build-windows.ps1
 ```
-
-TUI rendering has been verified on Windows 11. Clipboard (Ctrl+V) and Calibre conversion have not been tested end-to-end.
 
 ### macOS (experimental — untested)
 
@@ -331,78 +357,28 @@ chmod +x build-macos.sh
 ./build-macos.sh
 ```
 
-macOS build support has not been tested. Feedback welcome.
-
-### After building
-
-The build scripts place the executable at the repo root:
+The build output:
 
 ```
 KeroOle/
-  KeroOle          ← Linux / macOS launcher
-  KeroOle.exe      ← Windows launcher
-  _internal/       ← PyInstaller support files (bundled Python, DLLs, etc.)
-  Books/           ← download output (not bundled, created at runtime)
-```
-
-Run it directly — no `python` command or virtual environment needed:
-
-```bash
-./KeroOle          # Linux / macOS
-.\KeroOle.exe      # Windows
+  KeroOle          ← Linux / macOS
+  KeroOle.exe      ← Windows
+  _internal/       ← PyInstaller support files
+  Books/           ← download output (created at runtime)
 ```
 
 ---
 
-## Examples
+## Credits & License
 
-### Basic download
-
-```bash
-python kerole.py --cred "my@email.com:MyPassword" 9781491958698
-```
-
-Output:
-```
-[-] Logging into O'Reilly...
-[*] Retrieving book info...
-[-] Title: Test-Driven Development with Python, 2nd Edition
-[-] Authors: Harry J.W. Percival
-[-] Identifier: 9781491958698
-[*] Retrieving book chapters...
-[-] Downloading book contents... (53 chapters)
-    [####################################################] 100%
-[-] Downloading book CSSs... (2 files)
-[-] Downloading book images... (142 files)
-[-] Creating EPUB file...
-[*] Done: Books/Test-Driven Development with Python 2nd Edition (9781491958698)/9781491958698.epub
-```
-
-### Skip already-downloaded books
-
-```bash
-python kerole.py --cred "my@email.com:MyPassword" --skip-if-downloaded 9781491958698
-# Book already downloaded: Test-Driven Development with Python, 2nd Edition
-# EPUB: Books/Test-Driven Development with Python 2nd Edition (9781491958698)/9781491958698.epub
-```
-
-### Kindle-friendly export
-
-```bash
-python kerole.py --kindle 9781491958698
-```
-
----
-
-## API Version Support
-
-This fork automatically falls back to the O'Reilly v2 API when a book is unavailable on the v1 endpoint. Newer books (published 2024+) often require the v2 API — this is handled transparently with no extra configuration needed.
-
----
-
-## Credits
-
-- Original project: [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks) by Lorenzo Di Fuccia
+**Credits:**
+- Original project: [lorenzodifuccia/safaribooks](https://github.com/lorenzodifuccia/safaribooks) by Lorenzo Di Fuccia — the foundational download pipeline, EPUB assembly, and chapter extraction logic come from SafariBooks. The original code was released under WTFPL v2; recipients of prior versions retain WTFPL rights for those versions.
 - This fork (KeroOle): [tbdtechpro/KeroOle](https://github.com/tbdtechpro/KeroOle)
 
-For issues with KeroOle, please open an issue on the [tbdtechpro/KeroOle](https://github.com/tbdtechpro/KeroOle/issues) repository.
+For issues, please open a ticket on the [tbdtechpro/KeroOle](https://github.com/tbdtechpro/KeroOle/issues) repository.
+
+**License:**
+
+KeroOle is licensed under the [Beer for the Worker License (BWL) v1.0](LICENSE.md).
+
+**In short:** Free for individuals and worker-owned organizations, including commercial use. Corporations may not use this software without explicit written permission from the copyright holders. Prior versions distributed under WTFPL v2 retain that license for those versions.

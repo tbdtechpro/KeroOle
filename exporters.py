@@ -38,8 +38,12 @@ def _data_type(el) -> str:
     return el.get("data-type", "")
 
 
-def xhtml_to_markdown(el, _depth: int = 0) -> str:
-    """Recursively convert an lxml Element tree to GFM Markdown string."""
+def xhtml_to_markdown(el, _depth: int = 0, flavor: str = "gfm") -> str:
+    """Recursively convert an lxml Element tree to GFM or Obsidian Markdown.
+
+    flavor="gfm"      — standard GitHub Flavored Markdown (default)
+    flavor="obsidian" — Obsidian wiki-links, callout syntax, asset embeds
+    """
     tag = _tag(el)
 
     # Strip entirely
@@ -48,13 +52,13 @@ def xhtml_to_markdown(el, _depth: int = 0) -> str:
     if _data_type(el) == "indexterm":
         return ""
 
-    # Gather child content (recursive)
+    # Gather child content (recursive) — propagates flavor through recursion
     def children_md(node, depth=_depth) -> str:
         parts = []
         if node.text:
             parts.append(node.text)
         for child in node:
-            parts.append(xhtml_to_markdown(child, depth))
+            parts.append(xhtml_to_markdown(child, depth, flavor))
             if child.tail:
                 parts.append(child.tail)
         return "".join(parts)
@@ -117,9 +121,11 @@ def xhtml_to_markdown(el, _depth: int = 0) -> str:
     # Images
     if tag == "img":
         src = _attr(el, "src")
-        alt = _attr(el, "alt", "image")
-        # Rewrite path to images/ subfolder
         filename = os.path.basename(src) if src else ""
+        if flavor == "obsidian":
+            return "![[" + filename + "]]"
+        alt = el.get("alt", "").strip() or os.path.splitext(filename)[0].replace("-", " ").replace("_", " ") or "image"
+        # Rewrite path to images/ subfolder
         return "![" + alt + "](images/" + filename + ")"
 
     # Lists
@@ -147,7 +153,14 @@ def xhtml_to_markdown(el, _depth: int = 0) -> str:
     if tag in ("blockquote",) or _data_type(el) in ("note", "tip", "warning", "caution"):
         inner = children_md(el).strip()
         lines = inner.splitlines()
-        quoted = "\n".join("> " + line for line in lines)
+        if flavor == "obsidian":
+            dtype = _data_type(el)
+            if dtype in ("note", "tip", "warning", "caution"):
+                quoted = "> [!" + dtype + "]\n" + "\n".join("> " + line for line in lines)
+            else:
+                quoted = "\n".join("> " + line for line in lines)
+        else:
+            quoted = "\n".join("> " + line for line in lines)
         return "\n\n" + quoted + "\n\n"
 
     # Figure: image + caption
@@ -160,7 +173,7 @@ def xhtml_to_markdown(el, _depth: int = 0) -> str:
             caption_el = el.find(".//figcaption")
         parts = []
         if img_el is not None:
-            parts.append(xhtml_to_markdown(img_el, _depth))
+            parts.append(xhtml_to_markdown(img_el, _depth, flavor))
         if caption_el is not None:
             cap_text = "".join(caption_el.itertext()).strip()
             if cap_text:
@@ -323,6 +336,165 @@ class MarkdownExporter:
                 if md:
                     f.write(md)
                     f.write("\n\n---\n\n")
+
+
+# ---------------------------------------------------------------------------
+# ObsidianExporter
+# ---------------------------------------------------------------------------
+
+_OBSIDIAN_SOURCE_BASE = "https://learning.oreilly.com/library/view/"
+_XREF_LINK_RE = re.compile(
+    r'\[([^\[\]]+)\]\(([a-zA-Z0-9_.-]+\.xhtml(?:#[^)]+)?)\)'
+)
+
+
+class ObsidianExporter(MarkdownExporter):
+    """Convert an OEBPS book to Obsidian-flavored Markdown with frontmatter.
+
+    Differences from MarkdownExporter (GFM):
+    - YAML frontmatter on every chapter file (title, book, authors, tags, …)
+    - ``![[filename]]`` Obsidian wiki-embeds for images
+    - ``> [!note]`` / ``> [!tip]`` / ``> [!warning]`` / ``> [!caution]`` callouts
+    - ``[[stem#anchor|text]]`` wiki-links for intra-book cross-references
+    - Index note ``_book.md`` with chapter wiki-links (MOC pattern)
+    - Images copied to ``_assets/`` subfolder to keep vault root clean
+    """
+
+    def _convert_xhtml(self, xhtml_path: str) -> str:
+        try:
+            tree = etree.parse(xhtml_path, etree.XMLParser(recover=True))
+            root = tree.getroot()
+        except etree.XMLSyntaxError:
+            with open(xhtml_path, encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+            root = etree.fromstring(raw.encode("utf-8"), etree.XMLParser(recover=True))
+
+        md = xhtml_to_markdown(root, flavor="obsidian")
+        md = re.sub(r'\n{3,}', '\n\n', md)
+        md = _convert_xref_links(md)
+        return md.strip()
+
+    def _copy_images(self):
+        """Copy images to _assets/ subfolder (cleaner than root-level images/)."""
+        src = os.path.join(self.oebps, "Images")
+        if not os.path.isdir(src):
+            src = os.path.join(self.oebps, "images")
+        if not os.path.isdir(src):
+            return
+        dst = os.path.join(self.md_dir, "_assets")
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+
+    def _write_chapter_md(self, filename: str, md: str):
+        stem = os.path.splitext(filename)[0]
+        # Look up chapter title from chapters list
+        ch_title = next(
+            (c.get("title", "") for c in self.chapters if c.get("filename") == filename),
+            stem.replace("_", " "),
+        )
+        frontmatter = self._build_frontmatter(ch_title)
+        out_path = os.path.join(self.md_dir, stem + ".md")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(frontmatter)
+            f.write(md)
+            f.write("\n")
+
+    def _write_combined_md(self, markdown_map: dict):
+        """Write a MOC (Map of Content) index note linking all chapters."""
+        book_title = self.book_info.get("title", "")
+        authors = [a.get("name", "") for a in self.book_info.get("authors", [])]
+        subjects = self.book_info.get("subjects", [])
+        if isinstance(subjects, list) and subjects and isinstance(subjects[0], dict):
+            subjects = [s.get("name", "") for s in subjects]
+        tags = ["oreilly"] + [_slug(s) for s in subjects if s]
+
+        isbn = self.book_info.get("isbn", "")
+        book_id = self.book_id
+
+        fm_lines = ["---"]
+        fm_lines.append('title: "%s"' % book_title.replace('"', '\\"'))
+        fm_lines.append("type: book-index")
+        fm_lines.append('book_id: "%s"' % book_id)
+        if isbn:
+            fm_lines.append('isbn: "%s"' % isbn)
+        fm_lines.append("tags: [%s]" % ", ".join(tags))
+        fm_lines.append("---")
+        fm_lines.append("")
+
+        out_path = os.path.join(self.md_dir, "_book.md")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(fm_lines))
+            f.write("# %s\n\n" % book_title)
+            if authors:
+                f.write("*%s*\n\n" % ", ".join(authors))
+            f.write("## Chapters\n\n")
+            for ch in self.chapters:
+                fn = ch.get("filename", "")
+                if fn not in markdown_map:
+                    continue
+                stem = os.path.splitext(fn)[0]
+                title = ch.get("title", stem.replace("_", " "))
+                f.write("- [[%s|%s]]\n" % (stem, title))
+
+    def _build_frontmatter(self, chapter_title: str) -> str:
+        book_title = self.book_info.get("title", "")
+        book_id = self.book_id
+        isbn = self.book_info.get("isbn", "")
+        authors = [a.get("name", "") for a in self.book_info.get("authors", [])]
+        publishers = self.book_info.get("publishers", [])
+        if publishers and isinstance(publishers[0], dict):
+            publishers = [p.get("name", "") for p in publishers]
+        publisher = publishers[0] if publishers else ""
+        issued = self.book_info.get("issued", "")
+        subjects = self.book_info.get("subjects", [])
+        if isinstance(subjects, list) and subjects and isinstance(subjects[0], dict):
+            subjects = [s.get("name", "") for s in subjects]
+        tags = ["oreilly"] + [_slug(s) for s in subjects if s]
+        source = _OBSIDIAN_SOURCE_BASE + book_id + "/"
+
+        lines = ["---"]
+        lines.append('title: "%s"' % chapter_title.replace('"', '\\"'))
+        lines.append('book: "%s"' % book_title.replace('"', '\\"'))
+        lines.append('book_id: "%s"' % book_id)
+        if isbn:
+            lines.append('isbn: "%s"' % isbn)
+        if authors:
+            lines.append("authors:")
+            for a in authors:
+                lines.append('  - "%s"' % a.replace('"', '\\"'))
+        if publisher:
+            lines.append('publisher: "%s"' % publisher.replace('"', '\\"'))
+        if issued:
+            lines.append('published: "%s"' % issued)
+        lines.append("tags:")
+        for tag in tags:
+            lines.append("  - %s" % tag)
+        lines.append('source: "%s"' % source)
+        lines.append("---")
+        lines.append("")
+        return "\n".join(lines) + "\n"
+
+
+def _convert_xref_links(md: str) -> str:
+    """Convert intra-book xhtml links to Obsidian [[wikilinks]]."""
+    def _replace(m):
+        text = m.group(1)
+        target = m.group(2)
+        # Split filename from fragment
+        if "#" in target:
+            fname, fragment = target.split("#", 1)
+            stem = os.path.splitext(fname)[0]
+            return "[[%s#%s|%s]]" % (stem, fragment, text)
+        else:
+            stem = os.path.splitext(target)[0]
+            return "[[%s|%s]]" % (stem, text)
+    return _XREF_LINK_RE.sub(_replace, md)
+
+
+def _slug(text: str) -> str:
+    """Convert a subject/topic name to a lowercase tag-safe slug."""
+    return re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
 
 
 # ---------------------------------------------------------------------------

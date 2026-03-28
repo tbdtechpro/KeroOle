@@ -8,8 +8,10 @@ Requires:
 """
 
 import argparse
+import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -34,7 +36,7 @@ from pygloss import (
     Top,
 )
 
-from kerole import COOKIES_FILE, PATH, KeroOle, KeroOleError
+from kerole import COOKIES_FILE, PATH, KeroOle, KeroOleError, API_V2_TEMPLATE
 from retrieve_cookies import parse_cookie_string, get_oreilly_cookies_from_browser, login_with_credentials
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -73,18 +75,53 @@ value_style  = Style().foreground(C_WHITE)
 accent_style = Style().foreground(C_ACCENT).bold(True)
 cursor_style = Style().foreground(C_SELECTED).bold(True)
 
+# ── ASCII art variants ────────────────────────────────────────────────────────
+# Each variant is a list of lines.  Variant 0 is the default shown on startup.
+# Additional variants are unlocked via the cheat code system (see Settings).
+
+ASCII_ART_VARIANTS = [
+    # 0 — default: block letters, fits ≤ 54 columns
+    [
+        r" _  __                 ___  _",
+        r"| |/ / ___ _ _ ___   / _ \| | ___",
+        r"| ' / / -_) '_/ _ \ | (_) | |/ -_)",
+        r"|_|\_\ \___|_| \___/  \___/|_|\___|",
+    ],
+    # 1 — compact single-line banner (unlockable)
+    [
+        r"  ██╗  ██╗███████╗██████╗  ██████╗  ██╗     ███████╗",
+        r"  ██║ ██╔╝██╔════╝██╔══██╗██╔═══██╗ ██║     ██╔════╝",
+        r"  █████╔╝ █████╗  ██████╔╝██║   ██║ ██║     █████╗  ",
+        r"  ██╔═██╗ ██╔══╝  ██╔══██╗██║   ██║ ██║     ██╔══╝  ",
+        r"  ██║  ██╗███████╗██║  ██║╚██████╔╝ ███████╗███████╗",
+        r"  ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝ ╚═════╝  ╚══════╝╚══════╝",
+    ],
+    # 2 — minimal dots (unlockable)
+    [
+        r"  · K e r o O l e ·",
+        r"  ─────────────────",
+    ],
+]
+
+# Active variant index — 1 on startup; cheat codes can change this at runtime
+_ascii_art_variant: int = 1
+
+
 # ── Screens ───────────────────────────────────────────────────────────────────
 
 class Screen(Enum):
     MAIN       = auto()
-    LOGIN      = auto()
-    COOKIE     = auto()
-    ADD_BOOK   = auto()
-    QUEUE      = auto()
-    DOWNLOAD   = auto()
-    CALIBRE      = auto()
-    SETTINGS     = auto()
-    CALIBRE_SYNC = auto()
+    LOGIN         = auto()
+    COOKIE        = auto()
+    ADD_BOOK      = auto()
+    QUEUE         = auto()
+    DOWNLOAD      = auto()
+    CALIBRE       = auto()
+    SETTINGS      = auto()
+    CALIBRE_SYNC  = auto()
+    FAILED_SUMMARY = auto()
+    LIBRARY_BROWSE = auto()
+    SEARCH         = auto()
 
 
 # ── Custom messages ───────────────────────────────────────────────────────────
@@ -110,8 +147,15 @@ class BookErrorMsg(tea.Msg):
 
 
 @dataclass
+class BookSkippedMsg(tea.Msg):
+    book_id: str
+
+
+@dataclass
 class AllDownloadsDoneMsg(tea.Msg):
-    pass
+    failures: List[dict] = field(default_factory=list)
+    log_path: str = ""
+    debug_log_path: str = ""
 
 
 @dataclass
@@ -150,6 +194,28 @@ class LibraryScanDoneMsg(tea.Msg):
 
 
 @dataclass
+class SearchResult:
+    book_id: str
+    title: str
+    authors_str: str
+    publishers_str: str
+    issued: str
+    page_count: int
+    topics_str: str
+    description: str
+    cover_url: str
+    format: str
+
+
+@dataclass
+class SearchDoneMsg(tea.Msg):
+    results: list          # list of SearchResult
+    total: int
+    page: int
+    error: str = ""
+
+
+@dataclass
 class LoginResultMsg(tea.Msg):
     cookies: dict
     error: str = ""
@@ -179,6 +245,7 @@ class BookState:
     error: str = ""
     done: bool = False
     failed: bool = False
+    skipped: bool = False   # True when bypassed due to cascade failure
     calibre_done: bool = False
     calibre_failed: bool = False
 
@@ -203,12 +270,14 @@ class DownloadWorker:
     """Runs book downloads sequentially in a background thread."""
 
     def __init__(self, book_ids: List[str], program: tea.Program, kindle: bool = False,
-                 export_markdown: bool = False, export_db: bool = False,
-                 export_rag: bool = False, skip_if_downloaded: bool = False):
+                 export_markdown: bool = False, export_obsidian: bool = False,
+                 export_db: bool = False, export_rag: bool = False,
+                 skip_if_downloaded: bool = False):
         self.book_ids = book_ids
         self.program = program
         self.kindle = kindle
         self.export_markdown = export_markdown
+        self.export_obsidian = export_obsidian
         self.export_db = export_db
         self.export_rag = export_rag
         self.skip_if_downloaded = skip_if_downloaded
@@ -218,7 +287,22 @@ class DownloadWorker:
         self._thread.start()
 
     def _run(self):
+        consecutive_failures = 0
+        # Each entry: {book_id, title, reason, was_skipped}
+        failures: List[dict] = []
+
         for book_id in self.book_ids:
+            # Cascade guard: two consecutive failures → skip remaining books
+            if consecutive_failures >= 2:
+                self.program.send(BookSkippedMsg(book_id))
+                failures.append({
+                    "book_id": book_id,
+                    "title": self._fetch_book_title(book_id),
+                    "reason": "Skipped — multiple preceding downloads failed consecutively.",
+                    "was_skipped": True,
+                })
+                continue
+
             self.program.send(ProgressMsg(book_id, "Starting…", 0.0))
             try:
                 args = argparse.Namespace(
@@ -229,6 +313,7 @@ class DownloadWorker:
                     kindle=self.kindle,
                     log=False,
                     export_markdown=self.export_markdown,
+                    export_obsidian=self.export_obsidian,
                     export_db=self.export_db,
                     export_rag=self.export_rag,
                     skip_if_downloaded=self.skip_if_downloaded,
@@ -240,14 +325,111 @@ class DownloadWorker:
 
                 sb = KeroOle(args, progress_callback=cb, raise_on_exit=True, quiet=True)
                 self.program.send(BookDoneMsg(book_id, sb.book_title, sb.epub_path))
+                consecutive_failures = 0
 
             except KeroOleError as exc:
+                consecutive_failures += 1
+                title = self._fetch_book_title(book_id)
+                failures.append({
+                    "book_id": book_id,
+                    "title": title,
+                    "reason": str(exc),
+                    "was_skipped": False,
+                })
                 self.program.send(BookErrorMsg(book_id, str(exc)))
 
             except Exception as exc:
+                consecutive_failures += 1
+                title = self._fetch_book_title(book_id)
+                failures.append({
+                    "book_id": book_id,
+                    "title": title,
+                    "reason": f"Unexpected error: {exc}",
+                    "was_skipped": False,
+                })
                 self.program.send(BookErrorMsg(book_id, f"Unexpected error: {exc}"))
 
-        self.program.send(AllDownloadsDoneMsg())
+        log_path = ""
+        debug_log_path = ""
+        if failures:
+            log_path, debug_log_path = self._write_failure_logs(failures)
+
+        self.program.send(AllDownloadsDoneMsg(
+            failures=failures,
+            log_path=log_path,
+            debug_log_path=debug_log_path,
+        ))
+
+    @staticmethod
+    def _fetch_book_title(book_id: str) -> str:
+        """Minimal API call to retrieve a book title for failure reporting.
+        Returns empty string if the lookup fails for any reason."""
+        import requests as _req
+        try:
+            with open(COOKIES_FILE) as f:
+                cookies = json.load(f)
+            session = _req.Session()
+            session.cookies.update(cookies)
+            # Try v1 API first
+            r = session.get(KeroOle.API_TEMPLATE.format(book_id), timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and "title" in data:
+                    return data["title"]
+            # Fall back to v2 API
+            r = session.get(API_V2_TEMPLATE.format(book_id), timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("title", "")
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _write_failure_logs(failures: List[dict]) -> tuple:
+        """Write user-facing and debug failure logs to the Books/ directory.
+        Returns (user_log_path, debug_log_path)."""
+        books_dir = os.path.join(PATH, "Books")
+        os.makedirs(books_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path   = os.path.join(books_dir, f"failed_downloads_{ts}.txt")
+        debug_path = os.path.join(books_dir, f"failed_downloads_debug_{ts}.log")
+
+        failed  = [b for b in failures if not b["was_skipped"]]
+        skipped = [b for b in failures if b["was_skipped"]]
+
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write("KeroOle Download Failure Report\n")
+            f.write(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 60 + "\n\n")
+            if failed:
+                f.write(f"Books that started downloading but failed ({len(failed)}):\n")
+                for b in failed:
+                    t = f' — "{b["title"]}"' if b["title"] else ""
+                    f.write(f"  • Book {b['book_id']}{t}\n")
+                f.write("\n")
+            if skipped:
+                f.write(f"Books skipped due to preceding download failures ({len(skipped)}):\n")
+                for b in skipped:
+                    t = f' — "{b["title"]}"' if b["title"] else ""
+                    f.write(f"  • Book {b['book_id']}{t}\n")
+                f.write("\n")
+            f.write(
+                "To retry, add these book IDs to the queue in KeroOle.\n"
+                f"Debug log (for troubleshooting): {debug_path}\n"
+            )
+
+        with open(debug_path, "w", encoding="utf-8") as f:
+            f.write("KeroOle Debug Failure Log\n")
+            f.write(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 60 + "\n\n")
+            for b in failures:
+                kind  = "SKIPPED" if b["was_skipped"] else "FAILED"
+                title = b["title"] or "(title unavailable)"
+                f.write(f"[{kind}] Book {b['book_id']} — {title}\n")
+                f.write(f"  Reason: {b['reason']}\n\n")
+
+        return log_path, debug_path
 
 
 # ── Export-library worker ─────────────────────────────────────────────────────
@@ -256,14 +438,15 @@ class ExportLibraryWorker:
     """Runs markdown/db/rag exports against existing Books/ downloads in a background thread."""
 
     def __init__(self, books_dir: str, book_ids: List[str], program: tea.Program,
-                 export_markdown: bool = False, export_db: bool = False,
-                 export_rag: bool = False):
-        self.books_dir      = books_dir
-        self.book_ids       = book_ids   # pre-scanned list in display order
-        self.program        = program
+                 export_markdown: bool = False, export_obsidian: bool = False,
+                 export_db: bool = False, export_rag: bool = False):
+        self.books_dir       = books_dir
+        self.book_ids        = book_ids   # pre-scanned list in display order
+        self.program         = program
         self.export_markdown = export_markdown
-        self.export_db      = export_db
-        self.export_rag     = export_rag
+        self.export_obsidian = export_obsidian
+        self.export_db       = export_db
+        self.export_rag      = export_rag
         if export_rag:
             self.export_db = True
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -320,6 +503,20 @@ class ExportLibraryWorker:
                         folder_name=folder,
                     )
                     markdown_map = exporter.export()
+
+                if self.export_obsidian:
+                    self.program.send(ProgressMsg(book_id, "Exporting Obsidian…", 0.4))
+                    from exporters import ObsidianExporter
+                    obs_output_dir = exp_cfg.resolved_markdown_obsidian_dir()
+                    obs_exporter = ObsidianExporter(
+                        book_id=book_id,
+                        book_path=book_dir,
+                        book_info=book_info,
+                        chapters=chapters,
+                        output_dir=obs_output_dir,
+                        folder_name=folder,
+                    )
+                    obs_exporter.export()
 
                 if self.export_db:
                     self.program.send(ProgressMsg(book_id, "Storing in DB…", 0.7))
@@ -434,6 +631,85 @@ class CalibreSyncWorker:
         ))
 
 
+# ── O'Reilly Search worker ────────────────────────────────────────────────────
+
+class SearchWorker:
+    """Searches O'Reilly Learning API in a background thread."""
+
+    SEARCH_URL = "https://learning.oreilly.com/api/v1/search/"
+
+    def __init__(self, query: str, format_filter: str, topic: str, publisher: str,
+                 sort: str, page: int, program: tea.Program):
+        self.query         = query
+        self.format_filter = format_filter  # "book", "video", or "" for all
+        self.topic         = topic
+        self.publisher     = publisher
+        self.sort          = sort           # "relevance" or "created_time"
+        self.page          = page
+        self.program       = program
+        self._thread       = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        import json as _json
+        try:
+            session = self._make_session()
+            params = {"query": self.query, "limit": 10, "page": self.page}
+            if self.format_filter:
+                params["formats"] = self.format_filter
+            if self.topic:
+                params["topics"] = self.topic
+            if self.publisher:
+                params["publishers"] = self.publisher
+            if self.sort == "created_time":
+                params["sort"] = "created_time"
+
+            resp = session.get(self.SEARCH_URL, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+
+            results = []
+            for item in data.get("results", []):
+                authors = [a.get("name", "") for a in item.get("authors", [])]
+                pubs    = [p.get("name", "") for p in item.get("publishers", [])]
+                topics  = [t.get("name", "") for t in item.get("topics", [])][:4]
+                results.append(SearchResult(
+                    book_id=str(item.get("archive_id", "")),
+                    title=item.get("title", ""),
+                    authors_str=", ".join(authors),
+                    publishers_str=", ".join(pubs),
+                    issued=(item.get("issued") or "")[:4],   # year only
+                    page_count=item.get("virtual_pages", 0) or 0,
+                    topics_str=", ".join(topics),
+                    description=item.get("description", ""),
+                    cover_url=item.get("cover", ""),
+                    format=item.get("format", "book"),
+                ))
+            total = data.get("total", len(results))
+            self.program.send(SearchDoneMsg(results=results, total=total, page=self.page))
+        except Exception as exc:
+            self.program.send(SearchDoneMsg(results=[], total=0, page=self.page,
+                                            error=str(exc)))
+
+    @staticmethod
+    def _make_session():
+        """Build a requests Session loaded with saved cookies."""
+        import requests as _req
+        session = _req.Session()
+        session.headers.update({"Accept": "application/json"})
+        if os.path.isfile(COOKIES_FILE):
+            try:
+                import json as _json
+                with open(COOKIES_FILE) as f:
+                    cookies = _json.load(f)
+                session.cookies.update(cookies)
+            except Exception:
+                pass
+        return session
+
+
 # ── Calibre add worker ────────────────────────────────────────────────────────
 
 class CalibreAddWorker:
@@ -475,9 +751,11 @@ class CalibreAddWorker:
 class CalibreWorker:
     """Runs calibre ebook-convert on each downloaded EPUB in a background thread."""
 
-    def __init__(self, books: List[BookState], program: tea.Program):
+    def __init__(self, books: List[BookState], program: tea.Program,
+                 delete_original: bool = False):
         self.books = books
         self.program = program
+        self.delete_original = delete_original
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
@@ -504,6 +782,11 @@ class CalibreWorker:
                     timeout=600,
                 )
                 if result.returncode == 0:
+                    if self.delete_original and os.path.isfile(out_path):
+                        try:
+                            os.remove(book.epub_path)
+                        except OSError:
+                            pass
                     self.program.send(CalibreMsg(book.book_id, "done", out_path))
                 else:
                     err = (result.stderr or result.stdout or "unknown error").strip()
@@ -526,9 +809,11 @@ class AppModel(tea.Model):
         ("Extract Cookies from Browser", "BROWSER"),
         ("Set Session Cookie (paste)",   Screen.COOKIE),
         ("Login with Email/Password",    Screen.LOGIN),
+        ("Search O'Reilly",              Screen.SEARCH),
         ("Add Book to Queue",            Screen.ADD_BOOK),
         ("View / Run Queue",             Screen.QUEUE),
-        ("Sync with Calibre Library",     Screen.CALIBRE_SYNC),
+        ("Browse Library",               Screen.LIBRARY_BROWSE),
+        ("Sync with Calibre Library",    Screen.CALIBRE_SYNC),
         ("Export Paths / Settings",      Screen.SETTINGS),
         ("Quit",                         None),
     ]
@@ -557,12 +842,15 @@ class AppModel(tea.Model):
         # add-book screen
         self.book_id_input: str = ""
         self.add_book_status: str = ""
+        self.multi_book_mode: bool = False
+        self.multi_book_input: str = ""
 
         # queue
         self.queue: List[str] = []
 
         # export toggles
         self.export_markdown: bool = False
+        self.export_obsidian: bool = False
         self.export_db: bool = False
         self.export_rag: bool = False
         self.skip_if_downloaded: bool = False
@@ -577,6 +865,39 @@ class AppModel(tea.Model):
         self.export_library_mode: bool = False  # True when running export-library
         self.dl_scroll: int = 0                 # scroll offset for download screen
 
+        # failure summary state (populated when downloads finish with errors)
+        self.failed_books: List[dict] = []
+        self.failure_log_path: str = ""
+        self.failure_debug_log_path: str = ""
+
+        # library browse screen (Phase 1C)
+        self.lib_books: list = []           # from get_all_books()
+        self.lib_cursor: int = 0
+        self.lib_scroll: int = 0
+        self.lib_selected: set = set()
+        self.lib_filter: str = ""           # title filter text
+        self.lib_filter_mode: bool = False  # True when in /filter mode
+        self.lib_status: str = ""
+
+        # search screen (Phase 1A)
+        self.search_query: str = ""
+        self.search_topic: str = ""
+        self.search_publisher: str = ""
+        self.search_format: str = "book"    # "book", "video", ""
+        self.search_sort: str = "relevance" # "relevance" or "created_time"
+        self.search_results: list = []
+        self.search_cursor: int = 0
+        self.search_scroll: int = 0
+        self.search_selected: set = set()   # book_ids to add to queue
+        self.search_page: int = 1
+        self.search_total: int = 0
+        self.search_status: str = ""
+        self.search_running: bool = False
+        # search form phase: "form" (entering query) or "results" (viewing results)
+        self.search_phase: str = "form"
+        # which form field is focused: 0=query, 1=topic, 2=publisher
+        self.search_field: int = 0
+
         # settings screen
         from config import load_export_config
         _cfg = load_export_config()
@@ -584,12 +905,19 @@ class AppModel(tea.Model):
             _cfg.markdown_dir,
             _cfg.rag_dir,
             _cfg.db_path,
-            _cfg.folder_name_style,   # "title" or "id"
+            _cfg.folder_name_style,        # "title" or "id"
+            _cfg.markdown_gfm_dir,         # GFM output dir
+            _cfg.markdown_obsidian_dir,    # Obsidian vault dir
         ]
+        self.settings_delete_original: bool = _cfg.delete_original_epub
         self.settings_cursor: int = 0   # which field is focused
         self.settings_status: str = ""
         self.settings_action_status: str = ""   # "ok:..." or "error:..."
         self.settings_scanning: bool = False
+        # Cheat code sub-section
+        self.cheat_input: str = ""
+        self.cheat_status: str = ""   # "ok:..." or "error:..."
+        self.cheat_input_focused: bool = False
 
         # calibre sync screen
         self.sync_scanning: bool       = False
@@ -606,6 +934,9 @@ class AppModel(tea.Model):
 
         # program reference set after Program() creation
         self._program: Optional[tea.Program] = None
+
+        # Apply any previously unlocked cheats
+        self._apply_cheats()
 
     # ── tea.Model interface ────────────────────────────────────────────────
 
@@ -630,7 +961,10 @@ class AppModel(tea.Model):
             elif self.screen == Screen.COOKIE:
                 self.cookie_input = msg.text.strip()
             elif self.screen == Screen.ADD_BOOK:
-                self.book_id_input = msg.text.strip()
+                if self.multi_book_mode:
+                    self.multi_book_input += msg.text
+                else:
+                    self.book_id_input = msg.text.strip()
             return self, None
 
         if isinstance(msg, ProgressMsg):
@@ -645,7 +979,14 @@ class AppModel(tea.Model):
             self._on_book_error(msg)
             return self, None
 
+        if isinstance(msg, BookSkippedMsg):
+            self._on_book_skipped(msg)
+            return self, None
+
         if isinstance(msg, AllDownloadsDoneMsg):
+            self.failed_books = msg.failures
+            self.failure_log_path = msg.log_path
+            self.failure_debug_log_path = msg.debug_log_path
             if not self.export_library_mode:
                 self._start_calibre()
             else:
@@ -658,6 +999,8 @@ class AppModel(tea.Model):
 
         if isinstance(msg, AllCalibreDoneMsg):
             self.all_calibre_done = True
+            if self.failed_books:
+                self.screen = Screen.FAILED_SUMMARY
             return self, None
 
         if isinstance(msg, CalibreSyncDoneMsg):
@@ -723,10 +1066,31 @@ class AppModel(tea.Model):
                     self.cookie_status = "error:Could not read clipboard."
             elif self.screen == Screen.ADD_BOOK:
                 if msg.text:
-                    self.book_id_input = msg.text.strip()
-                    self.add_book_status = ""
+                    if self.multi_book_mode:
+                        self.multi_book_input += msg.text
+                        self.add_book_status = ""
+                    else:
+                        self.book_id_input = msg.text.strip()
+                        self.add_book_status = ""
                 else:
                     self.add_book_status = "error:Could not read clipboard."
+            return self, None
+
+        if isinstance(msg, SearchDoneMsg):
+            self.search_running = False
+            if msg.error:
+                self.search_status = "error:" + msg.error
+            else:
+                self.search_results = msg.results
+                self.search_total   = msg.total
+                self.search_page    = msg.page
+                self.search_cursor  = 0
+                self.search_scroll  = 0
+                self.search_status  = ""
+                if msg.results:
+                    self.search_phase = "results"
+                else:
+                    self.search_status = "No results found."
             return self, None
 
         return self, None
@@ -744,23 +1108,36 @@ class AppModel(tea.Model):
             Screen.ADD_BOOK: self._key_add_book,
             Screen.QUEUE:    self._key_queue,
             Screen.DOWNLOAD: self._key_download,
-            Screen.CALIBRE:      self._key_calibre,
-            Screen.SETTINGS:     self._key_settings,
-            Screen.CALIBRE_SYNC: self._key_calibre_sync,
+            Screen.CALIBRE:        self._key_calibre,
+            Screen.SETTINGS:       self._key_settings,
+            Screen.CALIBRE_SYNC:   self._key_calibre_sync,
+            Screen.FAILED_SUMMARY: self._key_failed_summary,
+            Screen.LIBRARY_BROWSE: self._key_library_browse,
+            Screen.SEARCH:         self._key_search,
         }
         handler = dispatch.get(self.screen)
         if handler:
             return handler(key)
         return self, None
 
+    def _visible_menu_items(self) -> list:
+        from config import load_unlocked_cheats as _luc
+        _cheats = _luc()
+        show_email = "show_email_login" in _cheats
+        return [
+            (label, dest) for label, dest in self.MENU_ITEMS
+            if not (label == "Login with Email/Password" and not show_email)
+        ]
+
     def _key_main(self, key: str):
-        n = len(self.MENU_ITEMS)
+        items = self._visible_menu_items()
+        n = len(items)
         if key in ("up", "k"):
             self.menu_cursor = (self.menu_cursor - 1) % n
         elif key in ("down", "j"):
             self.menu_cursor = (self.menu_cursor + 1) % n
         elif key in ("enter", " "):
-            _, target = self.MENU_ITEMS[self.menu_cursor]
+            _, target = items[self.menu_cursor]
             if target is None:
                 return self, tea.quit_cmd
             if target == "BROWSER":
@@ -771,6 +1148,19 @@ class AppModel(tea.Model):
                 if target == Screen.CALIBRE_SYNC:
                     self._start_calibre_sync()
                     return self, None
+                if target == Screen.LIBRARY_BROWSE:
+                    self._load_library_books()
+                    self.lib_cursor = 0
+                    self.lib_scroll = 0
+                    self.lib_filter = ""
+                    self.lib_filter_mode = False
+                    self.lib_status = ""
+                if target == Screen.SEARCH:
+                    self.search_phase = "form"
+                    self.search_field = 0
+                    self.search_results = []
+                    self.search_status = ""
+                    self.search_running = False
                 self.screen = target
                 self.cookie_status = ""
                 self.add_book_status = ""
@@ -831,22 +1221,50 @@ class AppModel(tea.Model):
         return self, None
 
     def _key_add_book(self, key: str):
-        if key == "escape":
-            self.screen = Screen.MAIN
-            self.book_id_input = ""
-        elif key == "enter":
-            self._add_book_to_queue()
-        elif key == "backspace":
-            self.book_id_input = self.book_id_input[:-1]
-            self.add_book_status = ""
-        elif key == "ctrl+u":
-            self.book_id_input = ""
-            self.add_book_status = ""
-        elif key == "ctrl+v":
-            self._read_clipboard_book()
-        elif len(key) == 1 and key.isprintable():
-            self.book_id_input += key
-            self.add_book_status = ""
+        if self.multi_book_mode:
+            if key == "escape":
+                # Esc from multi mode: return to single mode (stay on ADD_BOOK)
+                self.multi_book_mode = False
+                self.multi_book_input = ""
+                self.add_book_status = ""
+            elif key == "enter":
+                self._add_multi_books_to_queue()
+            elif key in ("m", "M"):
+                self.multi_book_mode = False
+                self.multi_book_input = ""
+                self.add_book_status = ""
+            elif key == "backspace":
+                self.multi_book_input = self.multi_book_input[:-1]
+                self.add_book_status = ""
+            elif key == "ctrl+u":
+                self.multi_book_input = ""
+                self.add_book_status = ""
+            elif key == "ctrl+v":
+                self._read_clipboard_book()
+            elif len(key) == 1 and key.isprintable():
+                self.multi_book_input += key
+                self.add_book_status = ""
+        else:
+            if key == "escape":
+                self.screen = Screen.MAIN
+                self.book_id_input = ""
+            elif key == "enter":
+                self._add_book_to_queue()
+            elif key in ("m", "M"):
+                self.multi_book_mode = True
+                self.multi_book_input = ""
+                self.add_book_status = ""
+            elif key == "backspace":
+                self.book_id_input = self.book_id_input[:-1]
+                self.add_book_status = ""
+            elif key == "ctrl+u":
+                self.book_id_input = ""
+                self.add_book_status = ""
+            elif key == "ctrl+v":
+                self._read_clipboard_book()
+            elif len(key) == 1 and key.isprintable():
+                self.book_id_input += key
+                self.add_book_status = ""
         return self, None
 
     def _key_queue(self, key: str):
@@ -864,6 +1282,8 @@ class AppModel(tea.Model):
             self.queue.clear()
         elif key in ("m", "M"):
             self.export_markdown = not self.export_markdown
+        elif key in ("o", "O"):
+            self.export_obsidian = not self.export_obsidian
         elif key in ("d", "D"):
             self.export_db = not self.export_db
         elif key in ("x", "X"):
@@ -892,7 +1312,11 @@ class AppModel(tea.Model):
         return self, None
 
     def _key_settings(self, key: str):
-        n = 6  # 4 editable fields + 2 action buttons
+        # Field indices: 0=md_dir, 1=rag_dir, 2=db_path, 3=folder_style(toggle),
+        #                4=gfm_dir, 5=obsidian_dir, 6=delete_original(toggle)
+        #                | 7=Scan btn, 8=Clear btn
+        _TEXT_FIELDS = {0, 1, 2, 4, 5}
+        n = 9  # 6 text/toggle fields + 1 bool toggle + 2 action buttons
         if key == "escape":
             self.screen = Screen.MAIN
             self.settings_status = ""
@@ -908,22 +1332,48 @@ class AppModel(tea.Model):
                 cur = self.settings_fields[3]
                 self.settings_fields[3] = "id" if cur == "title" else "title"
                 self.settings_status = ""
-        elif key == "enter" and self.settings_cursor < 4:
+        elif self.settings_cursor == 6:
+            # Toggle bool — delete_original_epub
+            if key in ("enter", " "):
+                self.settings_delete_original = not self.settings_delete_original
+                self._save_settings()
+        elif key == "enter" and self.settings_cursor in _TEXT_FIELDS:
             self._save_settings()
-        elif self.settings_cursor < 4 and key in ("backspace", "delete"):
+        elif self.settings_cursor in _TEXT_FIELDS and key in ("backspace", "delete"):
             val = self.settings_fields[self.settings_cursor]
             self.settings_fields[self.settings_cursor] = val[:-1]
             self.settings_status = ""
-        elif self.settings_cursor < 4 and key == "ctrl+u":
+        elif self.settings_cursor in _TEXT_FIELDS and key == "ctrl+u":
             self.settings_fields[self.settings_cursor] = ""
             self.settings_status = ""
-        elif self.settings_cursor < 4 and len(key) == 1 and key.isprintable():
+        elif self.settings_cursor in _TEXT_FIELDS and len(key) == 1 and key.isprintable():
             self.settings_fields[self.settings_cursor] += key
             self.settings_status = ""
-        elif self.settings_cursor == 4 and key == "enter":
+        elif self.settings_cursor == 7 and key == "enter":
             self._run_scan_library()
-        elif self.settings_cursor == 5 and key == "enter":
+        elif self.settings_cursor == 8 and key == "enter":
             self._run_clear_chapter_db()
+        # Cheat code input — active when cheat_input_focused
+        if self.cheat_input_focused:
+            if key == "escape":
+                self.cheat_input_focused = False
+                self.cheat_input = ""
+                self.cheat_status = ""
+            elif key in ("backspace", "delete"):
+                self.cheat_input = self.cheat_input[:-1]
+            elif key == "ctrl+u":
+                self.cheat_input = ""
+            elif key == "enter":
+                if self.cheat_input:
+                    self._enter_cheat_code(self.cheat_input)
+                    self.cheat_input = ""
+                self.cheat_input_focused = False
+            elif len(key) == 1 and key.isprintable():
+                self.cheat_input += key
+        elif key == "c" and self.settings_cursor not in _TEXT_FIELDS and not self.cheat_input_focused:
+            # 'c' on a non-text field activates cheat input
+            self.cheat_input_focused = True
+            self.cheat_status = ""
         return self, None
 
     def _save_settings(self):
@@ -933,12 +1383,42 @@ class AppModel(tea.Model):
             rag_dir=self.settings_fields[1].strip(),
             db_path=self.settings_fields[2].strip(),
             folder_name_style=self.settings_fields[3],
+            markdown_gfm_dir=self.settings_fields[4].strip(),
+            markdown_obsidian_dir=self.settings_fields[5].strip(),
+            delete_original_epub=self.settings_delete_original,
         )
         try:
             save_export_config(cfg)
             self.settings_status = "ok:Settings saved to ~/.kerole.toml"
         except Exception as exc:
             self.settings_status = f"error:Save failed — {exc}"
+
+    def _apply_cheats(self) -> None:
+        """Apply all currently unlocked cheats (called on startup and after each unlock)."""
+        global _ascii_art_variant
+        from config import load_unlocked_cheats
+        unlocked = load_unlocked_cheats()
+        # ASCII art — highest numbered unlocked variant wins
+        for variant_idx in range(len(ASCII_ART_VARIANTS) - 1, 0, -1):
+            if f"ascii_variant_{variant_idx}" in unlocked:
+                _ascii_art_variant = variant_idx
+                break
+        # Other effects are applied via settings_fields / menu filtering
+        # (show_email_login is read by _get_visible_menu_items at render time)
+
+    def _enter_cheat_code(self, code: str) -> None:
+        """Try to unlock a cheat code and apply effects immediately."""
+        from config import unlock_cheat, cheat_description
+        try:
+            already, effect = unlock_cheat(code)
+            desc = cheat_description(effect)
+            if already:
+                self.cheat_status = f"ok:Already unlocked: {desc}"
+            else:
+                self.cheat_status = f"ok:Unlocked — {desc}"
+            self._apply_cheats()
+        except ValueError:
+            self.cheat_status = "error:Unknown code"
 
     def _run_scan_library(self):
         if self.settings_scanning:
@@ -1094,6 +1574,31 @@ class AppModel(tea.Model):
         self.book_id_input = ""
         self.add_book_status = f"ok:Added {book_id} to queue."
 
+    def _add_multi_books_to_queue(self):
+        text = self.multi_book_input.strip()
+        if not text:
+            self.add_book_status = "error:Please paste or type book IDs first."
+            return
+        # Any non-digit characters are treated as delimiters; extract numeric runs
+        ids = re.findall(r'\d+', text)
+        if not ids:
+            self.add_book_status = "error:No numeric IDs found in the pasted text."
+            return
+        added, dupes = 0, 0
+        for bid in ids:
+            if bid not in self.queue:
+                self.queue.append(bid)
+                added += 1
+            else:
+                dupes += 1
+        self.multi_book_input = ""
+        if added == 0:
+            self.add_book_status = "error:All IDs already in queue."
+        elif dupes:
+            self.add_book_status = f"ok:Added {added} book(s) — {dupes} duplicate(s) skipped."
+        else:
+            self.add_book_status = f"ok:Added {added} book(s) to queue."
+
     def _start_downloads(self):
         if not self.queue:
             return
@@ -1114,15 +1619,31 @@ class AppModel(tea.Model):
         worker = DownloadWorker(
             self.dl_order, self._program,
             export_markdown=self.export_markdown,
+            export_obsidian=self.export_obsidian,
             export_db=self.export_db,
             export_rag=self.export_rag,
             skip_if_downloaded=self.skip_if_downloaded,
         )
         worker.start()
 
-    def _start_export_library(self):
-        if not (self.export_markdown or self.export_db or self.export_rag):
-            self.status_msg = "Select at least one export format (m/d/x) before running."
+    def _load_library_books(self):
+        """Reload lib_books from the registry DB."""
+        from config import load_export_config
+        exp_cfg = load_export_config()
+        books_dir = os.path.join(PATH, "Books")
+        db_path = exp_cfg.resolved_db_path() or os.path.join(books_dir, "library.db")
+        try:
+            from library import BookRegistry
+            reg = BookRegistry(db_path)
+            self.lib_books = reg.get_all_books()
+            reg.close()
+        except Exception:
+            self.lib_books = []
+
+    def _start_export_library(self, selected_ids=None):
+        """Start library export. If selected_ids is given, export only those books."""
+        if not (self.export_markdown or self.export_obsidian or self.export_db or self.export_rag):
+            self.status_msg = "Select at least one export format (m/o/d/x) before running."
             return
 
         import re as _re
@@ -1138,6 +1659,10 @@ class AppModel(tea.Model):
             if entry.is_dir() and _dir_re.match(entry.name):
                 m = _dir_re.match(entry.name)
                 book_ids.append(m.group(1))
+
+        # Filter to selected_ids when provided (Library Browse per-book export)
+        if selected_ids:
+            book_ids = [bid for bid in book_ids if bid in selected_ids]
 
         if not book_ids:
             self.status_msg = "No downloaded books found in Books/."
@@ -1158,6 +1683,7 @@ class AppModel(tea.Model):
             book_ids=book_ids,
             program=self._program,
             export_markdown=self.export_markdown,
+            export_obsidian=self.export_obsidian,
             export_db=self.export_db,
             export_rag=self.export_rag,
         )
@@ -1167,10 +1693,15 @@ class AppModel(tea.Model):
         successful = [self.books[bid] for bid in self.dl_order if not self.books[bid].failed]
         if not successful:
             self.all_calibre_done = True
+            if self.failed_books:
+                self.screen = Screen.FAILED_SUMMARY
             return
         self.calibre_running = True
         self.screen = Screen.CALIBRE
-        CalibreWorker(successful, self._program).start()
+        from config import load_export_config as _lec
+        exp_cfg = _lec()
+        CalibreWorker(successful, self._program,
+                      delete_original=exp_cfg.delete_original_epub).start()
 
     # ── Progress callbacks (called from worker threads via program.send) ───
 
@@ -1200,6 +1731,14 @@ class AppModel(tea.Model):
         b.failed = True
         b.stage  = "Failed"
 
+    def _on_book_skipped(self, msg: BookSkippedMsg):
+        if msg.book_id not in self.books:
+            self.books[msg.book_id] = BookState(book_id=msg.book_id)
+        b = self.books[msg.book_id]
+        b.skipped = True
+        b.failed  = True   # treated as failed so Calibre skips it too
+        b.stage   = "Skipped"
+
     def _on_calibre(self, msg: CalibreMsg):
         if msg.book_id not in self.books:
             return
@@ -1225,9 +1764,12 @@ class AppModel(tea.Model):
             Screen.ADD_BOOK: self._view_add_book,
             Screen.QUEUE:    self._view_queue,
             Screen.DOWNLOAD: self._view_download,
-            Screen.CALIBRE:      self._view_calibre,
-            Screen.SETTINGS:     self._view_settings,
-            Screen.CALIBRE_SYNC: self._view_calibre_sync,
+            Screen.CALIBRE:        self._view_calibre,
+            Screen.SETTINGS:       self._view_settings,
+            Screen.CALIBRE_SYNC:   self._view_calibre_sync,
+            Screen.FAILED_SUMMARY: self._view_failed_summary,
+            Screen.LIBRARY_BROWSE: self._view_library_browse,
+            Screen.SEARCH:         self._view_search,
         }
         render = views.get(self.screen, self._view_main)
         return render() + "\n"
@@ -1257,7 +1799,10 @@ class AppModel(tea.Model):
     # Main menu ───────────────────────────────────────────────────────────────
 
     def _view_main(self) -> str:
-        lines = [self._header(), ""]
+        art = ASCII_ART_VARIANTS[_ascii_art_variant % len(ASCII_ART_VARIANTS)]
+        art_style = Style().foreground(C_ACCENT).bold(True)
+        lines = [art_style.render(line) for line in art]
+        lines.append("")
 
         # Cookie status badge — always read from disk so external saves are reflected
         cookie_exists = os.path.isfile(COOKIES_FILE)
@@ -1275,10 +1820,11 @@ class AppModel(tea.Model):
         lines.append("  " + badge)
         lines.append("")
 
-        # Menu items
+        # Menu items — filter hidden items unless unlocked via cheat
+        visible_items = self._visible_menu_items()
         lib_count = self._library_book_count()
         q = len(self.queue)
-        for i, (label, _) in enumerate(self.MENU_ITEMS):
+        for i, (label, _) in enumerate(visible_items):
             is_queue = label == "View / Run Queue"
             if is_queue:
                 label = "View / Run Queue / Export"
@@ -1425,6 +1971,9 @@ class AppModel(tea.Model):
     # Add-book screen ─────────────────────────────────────────────────────────
 
     def _view_add_book(self) -> str:
+        if self.multi_book_mode:
+            return self._view_add_book_multi()
+
         lines = [self._header("Add Book to Queue"), ""]
 
         lines.append(label_style.render("Enter the numeric Book ID from the O'Reilly URL:"))
@@ -1451,9 +2000,44 @@ class AppModel(tea.Model):
                 lines.append(error_style.render("✗ " + msg))
             lines.append("")
 
-        lines.append(self._footer("Enter  add    Ctrl+V  paste    Esc  back"))
+        lines.append(self._footer("Enter  add    Ctrl+V  paste    m  multi-add    Esc  back"))
         content = "\n".join(lines)
         return panel_style.width(min(self.width - 4, 60)).render(content)
+
+    def _view_add_book_multi(self) -> str:
+        lines = [self._header("Add Multiple Books"), ""]
+
+        lines.append(label_style.render("Paste a list of book IDs — any separator works"))
+        lines.append(hint_style.render("  (commas, spaces, newlines, pipes, full URLs, etc.)"))
+        lines.append("")
+
+        cursor = "█"
+        # Show the last ~8 lines of input to keep the box manageable
+        display_text = self.multi_book_input + cursor
+        text_lines = display_text.splitlines() or [""]
+        visible = "\n".join(text_lines[-8:])
+        input_box = (
+            Style()
+            .border(normal_border())
+            .border_foreground(C_ACCENT)
+            .padding(0, 1)
+            .width(56)
+            .render(visible)
+        )
+        lines.append(input_box)
+        lines.append("")
+
+        if self.add_book_status:
+            kind, _, msg = self.add_book_status.partition(":")
+            if kind == "ok":
+                lines.append(success_style.render("✓ " + msg))
+            else:
+                lines.append(error_style.render("✗ " + msg))
+            lines.append("")
+
+        lines.append(self._footer("Enter  add all    Ctrl+V  paste    m/Esc  back to single"))
+        content = "\n".join(lines)
+        return panel_style.width(min(self.width - 4, 68)).render(content)
 
     # Queue screen ────────────────────────────────────────────────────────────
 
@@ -1491,14 +2075,15 @@ class AppModel(tea.Model):
             marker = success_style.render("✓") if value else hint_style.render("○")
             return f"  {marker} {label}"
 
-        lines.append(_toggle("[m] Markdown export", self.export_markdown))
+        lines.append(_toggle("[m] GFM Markdown",       self.export_markdown))
+        lines.append(_toggle("[o] Obsidian Markdown",  self.export_obsidian))
         lines.append(_toggle("[d] Chapter Content DB", self.export_db))
-        lines.append(_toggle("[x] RAG JSONL",       self.export_rag))
+        lines.append(_toggle("[x] RAG JSONL",          self.export_rag))
         lines.append(_toggle("[k] Skip if downloaded", self.skip_if_downloaded))
         lines.append("")
 
         lines.append(self._footer(
-            "a  add    r  run    e  export library    s  set cookie    c  clear    m/d/x/k  toggles    Esc  back"
+            "a  add    r  run    e  export library    s  set cookie    c  clear    m/o/d/x/k  toggles    Esc  back"
         ))
         content = "\n".join(lines)
         return panel_style.width(min(self.width - 4, 60)).render(content)
@@ -1542,7 +2127,11 @@ class AppModel(tea.Model):
             else:
                 id_line = book_id
 
-            if b.failed:
+            if b.skipped:
+                status = Style().foreground(C_YELLOW).render("⊘ Skipped (cascade failure)")
+                lines.append(f"  {id_line}")
+                lines.append(f"  {status}")
+            elif b.failed:
                 status = error_style.render("✗ " + (b.error[:50] if b.error else "Failed"))
                 lines.append(f"  {id_line}")
                 lines.append(f"  {status}")
@@ -1612,11 +2201,17 @@ class AppModel(tea.Model):
         box_w = min(self.width - 12, 56)
 
         # (label, placeholder when empty, sub-hint shown below field, field index)
+        # Field indices: 0=legacy_md_dir, 1=rag_dir, 2=db_path,
+        #                4=gfm_dir, 5=obsidian_dir  (3 is the toggle below)
         field_defs = [
-            ("Markdown output dir",
-             "blank = next to each book in Books/",
-             "e.g. ~/Documents/Books/MD  — one subfolder per book is created inside",
-             0),
+            ("GFM Markdown output dir",
+             "blank = Books/{title}/markdown/",
+             "e.g. ~/Documents/Books/MD  — each book gets its own subfolder inside",
+             4),
+            ("Obsidian vault dir",
+             "blank = Books/{title}/markdown/",
+             "e.g. ~/Documents/ObsidianVault  — set to your Obsidian vault root",
+             5),
             ("RAG JSONL output dir",
              "blank = next to each book in Books/",
              "e.g. ~/Documents/Books/RAG  — all JSONL files land flat inside",
@@ -1668,9 +2263,23 @@ class AppModel(tea.Model):
         lines.append(hint_style.render("  ↳ How export subfolders are named — by book title or numeric book ID"))
         lines.append("")
 
+        # Toggle: delete original EPUB after Calibre conversion
+        focused = self.settings_cursor == 6
+        del_on  = self.settings_delete_original
+        on_lbl  = accent_style.render("[ On  ]") if del_on  else hint_style.render("[ On  ]")
+        off_lbl = accent_style.render("[ Off ]") if not del_on else hint_style.render("[ Off ]")
+        lbl = (accent_style if focused else label_style).render("Delete original EPUB after Calibre conversion")
+        del_toggle = f"  {on_lbl}  {off_lbl}"
+        if focused:
+            del_toggle += "  " + hint_style.render("Space to toggle  (saves immediately)")
+        lines.append(lbl)
+        lines.append(del_toggle)
+        lines.append(hint_style.render("  ↳ When On, the pre-conversion EPUB is removed after a successful Calibre convert"))
+        lines.append("")
+
         # Action buttons
-        scan_focused  = self.settings_cursor == 4
-        clear_focused = self.settings_cursor == 5
+        scan_focused  = self.settings_cursor == 7
+        clear_focused = self.settings_cursor == 8
 
         def _action_btn(label: str, focused: bool, scanning: bool = False) -> str:
             lbl = (accent_style if focused else label_style).render(label)
@@ -1701,6 +2310,38 @@ class AppModel(tea.Model):
                 lines.append(error_style.render("✗ " + msg))
             lines.append("")
 
+        # Cheat code sub-section
+        lines.append(hint_style.render("  ─── Cheat Codes ───"))
+        from config import load_unlocked_cheats, cheat_description
+        unlocked = load_unlocked_cheats()
+        if unlocked:
+            for eff in sorted(unlocked):
+                lines.append(hint_style.render(f"  ✓ {cheat_description(eff)}"))
+        else:
+            lines.append(hint_style.render("  (none unlocked)"))
+        if self.cheat_input_focused:
+            cursor = "█"
+            masked = "*" * len(self.cheat_input) + cursor
+            cheat_box = (
+                Style()
+                .border(normal_border())
+                .border_foreground(C_ACCENT)
+                .padding(0, 1)
+                .width(30)
+                .render(masked)
+            )
+            lines.append(accent_style.render("Enter code:") + " " + cheat_box)
+            lines.append(hint_style.render("  Enter to submit  Esc to cancel  (input is masked)"))
+        else:
+            lines.append(hint_style.render("  Press [c] to enter a cheat code"))
+        if self.cheat_status:
+            kind, _, msg = self.cheat_status.partition(":")
+            if kind == "ok":
+                lines.append(success_style.render("✓ " + msg))
+            else:
+                lines.append(error_style.render("✗ " + msg))
+        lines.append("")
+
         lines.append(self._footer("Tab/↓  next    Enter  save/run    Ctrl+U  clear    Space  toggle    Esc  back"))
         content = "\n".join(lines)
         return panel_style.width(min(self.width - 4, 68)).render(content)
@@ -1723,6 +2364,378 @@ class AppModel(tea.Model):
             program=self._program,
         )
         worker.start()
+
+    def _key_failed_summary(self, key: str):
+        if key in ("escape", "q", "enter"):
+            self.screen = Screen.MAIN
+        return self, None
+
+    # ── Library Browse screen (Phase 1C) ────────────────────────────────────
+
+    def _key_library_browse(self, key: str):
+        if self.lib_filter_mode:
+            if key == "escape":
+                self.lib_filter_mode = False
+                self.lib_filter = ""
+            elif key in ("backspace", "delete"):
+                self.lib_filter = self.lib_filter[:-1]
+            elif key == "ctrl+u":
+                self.lib_filter = ""
+            elif len(key) == 1 and key.isprintable():
+                self.lib_filter += key
+            return self, None
+
+        visible = self._lib_filtered_books()
+        total = len(visible)
+
+        if key in ("escape", "q"):
+            self.screen = Screen.MAIN
+        elif key == "/":
+            self.lib_filter_mode = True
+        elif key in ("up", "k"):
+            self.lib_cursor = max(0, self.lib_cursor - 1)
+            if self.lib_cursor < self.lib_scroll:
+                self.lib_scroll = self.lib_cursor
+        elif key in ("down", "j"):
+            self.lib_cursor = min(max(0, total - 1), self.lib_cursor + 1)
+            rows = max(3, self.height - 10)
+            if self.lib_cursor >= self.lib_scroll + rows:
+                self.lib_scroll = self.lib_cursor - rows + 1
+        elif key == " ":
+            if 0 <= self.lib_cursor < total:
+                bid = visible[self.lib_cursor]["book_id"]
+                if bid in self.lib_selected:
+                    self.lib_selected.discard(bid)
+                else:
+                    self.lib_selected.add(bid)
+        elif key == "a":
+            all_ids = {b["book_id"] for b in visible}
+            if self.lib_selected >= all_ids:
+                self.lib_selected = set()
+            else:
+                self.lib_selected = all_ids.copy()
+        elif key == "e":
+            # Export selected books
+            if not self.lib_selected:
+                self.lib_status = "error:No books selected — use Space to select, or A for all."
+            else:
+                self._start_export_library(selected_ids=self.lib_selected)
+        elif key == "A":
+            # Export ALL books (ignores selection)
+            self._start_export_library()
+        elif key == "r":
+            # Refresh book list from DB
+            self._load_library_books()
+            self.lib_status = "ok:Library refreshed."
+        return self, None
+
+    def _lib_filtered_books(self) -> list:
+        """Return lib_books filtered by current lib_filter (title substring)."""
+        if not self.lib_filter:
+            return self.lib_books
+        q = self.lib_filter.lower()
+        return [b for b in self.lib_books if q in (b.get("title") or "").lower()]
+
+    def _view_library_browse(self) -> str:
+        books = self._lib_filtered_books()
+        total = len(books)
+
+        lines = [self._header("Browse Library"), ""]
+
+        # Status / filter bar
+        if self.lib_filter_mode:
+            lines.append(accent_style.render(f"  Filter: {self.lib_filter}█"))
+        elif self.lib_filter:
+            lines.append(hint_style.render(f"  Filter: {self.lib_filter}  (/ to edit, Esc to clear)"))
+        else:
+            lines.append(hint_style.render(f"  {len(self.lib_books)} books in library  •  / to filter"))
+
+        if self.lib_status:
+            if self.lib_status.startswith("error:"):
+                lines.append(error_style.render("  " + self.lib_status[6:]))
+            else:
+                lines.append(success_style.render("  " + self.lib_status.lstrip("ok:")))
+        lines.append("")
+
+        if not books:
+            lines.append(hint_style.render("  No books found." if self.lib_filter else
+                                            "  Library is empty — download a book first."))
+            lines.append("")
+            lines.append(self._footer("r  refresh    /  filter    Esc  back"))
+            return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
+
+        rows = max(3, self.height - 10)
+        self.lib_scroll = max(0, min(self.lib_scroll, max(0, total - rows)))
+        visible = books[self.lib_scroll: self.lib_scroll + rows]
+
+        for i, book in enumerate(visible):
+            abs_idx = self.lib_scroll + i
+            focused = abs_idx == self.lib_cursor
+            bid     = book["book_id"]
+            checked = bid in self.lib_selected
+
+            # Status badges
+            xhtml_ok = (book.get("stored_chapters") or 0) > 0
+            md_ok    = (book.get("md_chapters") or 0) > 0
+            badge_xhtml = success_style.render("[DB]") if xhtml_ok else hint_style.render("[DB]")
+            badge_md    = success_style.render("[MD]") if md_ok    else hint_style.render("[MD]")
+            badges = f"{badge_xhtml}{badge_md}"
+
+            title   = (book.get("title") or bid)[:40]
+            box     = accent_style.render("[✓]") if checked else "[ ]"
+            prefix  = "▶ " if focused else "  "
+            row     = f"{prefix}{box}  {title}  {badges}"
+            if focused:
+                lines.append(cursor_style.render(row))
+            else:
+                lines.append(row)
+
+        if total > rows:
+            end = min(self.lib_scroll + rows, total)
+            lines.append("")
+            lines.append(hint_style.render(
+                f"  Showing {self.lib_scroll + 1}–{end} of {total}  ↑/↓ scroll"
+            ))
+
+        lines.append("")
+        sel_count = len(self.lib_selected)
+        lines.append(self._footer(
+            f"↑/↓ move  Space toggle  a all  e export selected ({sel_count})  A export all  / filter  r refresh  Esc back"
+        ))
+        return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
+
+    # ── Search screen (Phase 1A) ─────────────────────────────────────────────
+
+    def _key_search(self, key: str):
+        if self.search_phase == "form":
+            return self._key_search_form(key)
+        else:
+            return self._key_search_results(key)
+
+    def _key_search_form(self, key: str):
+        _EDITABLE = {0, 1, 2}
+
+        if key == "escape":
+            self.screen = Screen.MAIN
+        elif key in ("tab", "down"):
+            self.search_field = (self.search_field + 1) % 5
+        elif key in ("shift+tab", "up"):
+            self.search_field = (self.search_field - 1) % 5
+        elif self.search_field == 3:
+            # format toggle
+            if key in (" ", "enter", "left", "right"):
+                options = ("book", "video", "")
+                idx = options.index(self.search_format) if self.search_format in options else 0
+                self.search_format = options[(idx + 1) % len(options)]
+        elif self.search_field == 4:
+            # sort toggle
+            if key in (" ", "enter", "left", "right"):
+                self.search_sort = "created_time" if self.search_sort == "relevance" else "relevance"
+        elif key == "enter" and self.search_field in _EDITABLE:
+            if self.search_query.strip():
+                self._run_search(page=1)
+        elif self.search_field in _EDITABLE and key in ("backspace", "delete"):
+            if self.search_field == 0:
+                self.search_query = self.search_query[:-1]
+            elif self.search_field == 1:
+                self.search_topic = self.search_topic[:-1]
+            elif self.search_field == 2:
+                self.search_publisher = self.search_publisher[:-1]
+        elif self.search_field in _EDITABLE and key == "ctrl+u":
+            if self.search_field == 0:
+                self.search_query = ""
+            elif self.search_field == 1:
+                self.search_topic = ""
+            elif self.search_field == 2:
+                self.search_publisher = ""
+        elif self.search_field in _EDITABLE and len(key) == 1 and key.isprintable():
+            if self.search_field == 0:
+                self.search_query += key
+            elif self.search_field == 1:
+                self.search_topic += key
+            elif self.search_field == 2:
+                self.search_publisher += key
+        return self, None
+
+    def _key_search_results(self, key: str):
+        total = len(self.search_results)
+        rows  = max(3, self.height - 12)
+
+        if key in ("escape", "q"):
+            self.search_phase = "form"
+            self.search_status = ""
+        elif key in ("up", "k"):
+            self.search_cursor = max(0, self.search_cursor - 1)
+            if self.search_cursor < self.search_scroll:
+                self.search_scroll = self.search_cursor
+        elif key in ("down", "j"):
+            self.search_cursor = min(max(0, total - 1), self.search_cursor + 1)
+            if self.search_cursor >= self.search_scroll + rows:
+                self.search_scroll = self.search_cursor - rows + 1
+        elif key == " ":
+            if 0 <= self.search_cursor < total:
+                bid = self.search_results[self.search_cursor].book_id
+                if bid in self.search_selected:
+                    self.search_selected.discard(bid)
+                else:
+                    self.search_selected.add(bid)
+        elif key in ("]",):
+            if not self.search_running:
+                max_page = max(1, (self.search_total + 9) // 10)
+                if self.search_page < max_page:
+                    self._run_search(page=self.search_page + 1)
+        elif key in ("[",):
+            if not self.search_running and self.search_page > 1:
+                self._run_search(page=self.search_page - 1)
+        elif key in ("enter", "r", "R"):
+            # Add selected results to queue and go to QUEUE screen
+            added = 0
+            for bid in self.search_selected:
+                if bid and bid not in self.queue:
+                    self.queue.append(bid)
+                    self.books[bid] = BookState(book_id=bid)
+                    self.dl_order.append(bid)
+                    added += 1
+            if added:
+                self.search_selected = set()
+                self.status_msg = f"Added {added} book(s) to queue."
+                self.screen = Screen.QUEUE
+        return self, None
+
+    def _run_search(self, page: int):
+        if self.search_running:
+            return
+        self.search_running = True
+        self.search_status = "Searching…"
+        worker = SearchWorker(
+            query=self.search_query.strip(),
+            format_filter=self.search_format,
+            topic=self.search_topic.strip(),
+            publisher=self.search_publisher.strip(),
+            sort=self.search_sort,
+            page=page,
+            program=self._program,
+        )
+        worker.start()
+
+    def _view_search(self) -> str:
+        if self.search_phase == "results":
+            return self._view_search_results()
+        return self._view_search_form()
+
+    def _view_search_form(self) -> str:
+        lines = [self._header("Search O'Reilly"), ""]
+        box_w = min(self.width - 14, 50)
+
+        def _field(label: str, value: str, idx: int, placeholder: str = "") -> list:
+            focused = self.search_field == idx
+            cursor  = "█" if focused else ""
+            border  = C_ACCENT if focused else C_MUTED
+            display = (value + cursor) if value else (hint_style.render(placeholder) + cursor)
+            box = (
+                Style().border(normal_border()).border_foreground(border)
+                .padding(0, 1).width(box_w)
+                .render(display)
+            )
+            lbl = (accent_style if focused else label_style).render(label)
+            return [lbl, box]
+
+        lines += _field("Search query", self.search_query, 0, "e.g. kubernetes, machine learning…")
+        lines.append("")
+        lines += _field("Topic filter", self.search_topic, 1, "e.g. python, cloud, security  (optional)")
+        lines.append("")
+        lines += _field("Publisher filter", self.search_publisher, 2, "e.g. oreilly, packt  (optional)")
+        lines.append("")
+
+        # Format toggle
+        fmt_focused = self.search_field == 3
+        fmt_labels = {"book": "Books", "video": "Videos", "": "All"}
+        fmt_row = "  " + "  ".join(
+            accent_style.render(f"[{v}]") if self.search_format == k else hint_style.render(f"[{v}]")
+            for k, v in fmt_labels.items()
+        )
+        lbl = (accent_style if fmt_focused else label_style).render("Format")
+        lines.append(lbl)
+        lines.append(fmt_row)
+        lines.append("")
+
+        # Sort toggle
+        sort_focused = self.search_field == 4
+        relevance_s  = accent_style.render("[Relevance]") if self.search_sort == "relevance" else hint_style.render("[Relevance]")
+        newest_s     = accent_style.render("[Newest]")    if self.search_sort == "created_time" else hint_style.render("[Newest]")
+        lbl = (accent_style if sort_focused else label_style).render("Sort")
+        lines.append(lbl)
+        lines.append(f"  {relevance_s}  {newest_s}")
+        lines.append("")
+
+        if self.search_status:
+            if self.search_status.startswith("error:"):
+                lines.append(error_style.render("  " + self.search_status[6:]))
+            else:
+                lines.append(hint_style.render("  " + self.search_status))
+            lines.append("")
+
+        lines.append(self._footer("Tab/↓ move  Enter search  ←→ toggle options  Esc back"))
+        return panel_style.width(min(self.width - 4, 72)).render("\n".join(lines))
+
+    def _view_search_results(self) -> str:
+        results = self.search_results
+        total   = self.search_total
+        page    = self.search_page
+        max_page = max(1, (total + 9) // 10)
+
+        lines = [self._header("Search O'Reilly — Results"), ""]
+
+        # Summary bar
+        sel_count = len(self.search_selected)
+        summary = f"  {total} results  •  page {page}/{max_page}  •  {sel_count} selected"
+        if self.search_running:
+            summary += "  " + hint_style.render("⟳ loading…")
+        lines.append(accent_style.render(summary))
+        lines.append("")
+
+        if not results and not self.search_running:
+            lines.append(hint_style.render("  No results."))
+            lines.append("")
+            lines.append(self._footer("Esc  back to form"))
+            return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
+
+        rows = max(3, self.height - 12)
+        self.search_scroll = max(0, min(self.search_scroll, max(0, len(results) - rows)))
+        visible = results[self.search_scroll: self.search_scroll + rows]
+
+        for i, result in enumerate(visible):
+            abs_idx = self.search_scroll + i
+            focused  = abs_idx == self.search_cursor
+            checked  = result.book_id in self.search_selected
+
+            fmt_icon = hint_style.render("[V]") if result.format == "video" else ""
+            box      = accent_style.render("[✓]") if checked else "[ ]"
+            prefix   = "▶ " if focused else "  "
+            title    = result.title[:38]
+            year     = result.issued[:4] if result.issued else ""
+            pages    = f"{result.page_count}p" if result.page_count else ""
+            meta     = "  " + hint_style.render(
+                " · ".join(filter(None, [result.authors_str[:24], result.publishers_str[:16],
+                                          year, pages]))
+            )
+            row = f"{prefix}{box} {fmt_icon} {title}"
+            if focused:
+                lines.append(cursor_style.render(row))
+                lines.append(meta)
+            else:
+                lines.append(row)
+                lines.append(meta)
+
+        if len(results) < total:
+            lines.append("")
+            lines.append(hint_style.render(f"  [ to prev page  ] to next page"))
+
+        lines.append("")
+        lines.append(self._footer(
+            "↑/↓ move  Space select  Enter/r add to queue  [ prev  ] next  Esc back"
+        ))
+        return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
 
     def _key_calibre_sync(self, key: str):
         # Scanning — only Esc
@@ -1787,6 +2800,47 @@ class AppModel(tea.Model):
                 self._start_calibre_add(to_add)
 
         return self, None
+
+    # Failed Summary screen ───────────────────────────────────────────────────
+
+    def _view_failed_summary(self) -> str:
+        lines = [self._header("Download Failures"), ""]
+
+        failed  = [b for b in self.failed_books if not b.get("was_skipped")]
+        skipped = [b for b in self.failed_books if b.get("was_skipped")]
+
+        if failed:
+            lines.append(error_style.render(f"  {len(failed)} book(s) failed to download:"))
+            for b in failed:
+                t = f'  "{b["title"]}"' if b["title"] else ""
+                lines.append(f"    • {b['book_id']}{t}")
+            lines.append("")
+
+        if skipped:
+            lines.append(Style().foreground(C_YELLOW).render(
+                f"  {len(skipped)} book(s) skipped (consecutive failure cascade):"
+            ))
+            for b in skipped:
+                t = f'  "{b["title"]}"' if b["title"] else ""
+                lines.append(f"    • {b['book_id']}{t}")
+            lines.append("")
+
+        if self.failure_log_path:
+            lines.append(hint_style.render("  Failure report saved to:"))
+            lines.append(value_style.render(f"    {self.failure_log_path}"))
+            lines.append("")
+        if self.failure_debug_log_path:
+            lines.append(hint_style.render("  Debug log (for troubleshooting):"))
+            lines.append(value_style.render(f"    {self.failure_debug_log_path}"))
+            lines.append("")
+
+        lines.append(hint_style.render(
+            "  Add failed book IDs to the queue to retry downloading them."
+        ))
+        lines.append("")
+        lines.append(self._footer("Esc / Enter / q  back to menu"))
+        content = "\n".join(lines)
+        return panel_style.width(min(self.width - 4, 76)).render(content)
 
     def _view_calibre_sync(self) -> str:
         lines = [self._header("Sync with Calibre Library"), ""]

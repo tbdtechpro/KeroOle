@@ -65,6 +65,10 @@ class BookRegistry:
                 play_order  INTEGER,
                 FOREIGN KEY (book_id) REFERENCES registry(book_id)
             );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS chapters_fts
+            USING fts5(book_id UNINDEXED, title, markdown_text,
+                       content=chapters, content_rowid=id);
         """)
         self._conn.commit()
 
@@ -265,6 +269,46 @@ class BookRegistry:
             )
 
         self._conn.commit()
+        # Rebuild FTS index for this book (content= tables require manual sync)
+        self._conn.execute("INSERT INTO chapters_fts(chapters_fts) VALUES('rebuild')")
+        self._conn.commit()
+
+    def search_chapters(self, query: str) -> list:
+        """Full-text search across chapter titles and markdown content.
+
+        Returns up to 50 results with a snippet from the matching text.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT c.book_id, c.chapter_index, c.title,
+                   snippet(chapters_fts, 2, '[', ']', '…', 64) AS snippet
+            FROM chapters_fts
+            JOIN chapters c ON c.id = chapters_fts.rowid
+            WHERE chapters_fts MATCH ?
+            ORDER BY rank
+            LIMIT 50
+            """,
+            (query,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_all_books(self) -> list:
+        """Return all registry books with chapter storage status counts."""
+        rows = self._conn.execute(
+            """
+            SELECT r.book_id, r.title, r.authors, r.downloaded_at,
+                   COUNT(c.id) AS total_chapters,
+                   SUM(CASE WHEN c.xhtml_content IS NOT NULL AND c.xhtml_content != ''
+                            THEN 1 ELSE 0 END) AS stored_chapters,
+                   SUM(CASE WHEN c.markdown_text IS NOT NULL AND c.markdown_text != ''
+                            THEN 1 ELSE 0 END) AS md_chapters
+            FROM registry r
+            LEFT JOIN chapters c ON r.book_id = c.book_id
+            GROUP BY r.book_id
+            ORDER BY r.downloaded_at DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def store_toc(self, book_id: str, toc_data: list):
         """Flatten TOC tree and store in toc table."""
