@@ -1131,6 +1131,8 @@ class KeroOle:
             # ── Author extraction ─────────────────────────────────────────────
             if not authors:
                 for el in tree.iter():
+                    if callable(el.tag):  # skip comments / processing instructions
+                        continue
                     cls = _classes(el)
                     matched = (
                         "author" in cls
@@ -1151,6 +1153,8 @@ class KeroOle:
             if not publishers:
                 # Pattern 1: class="publishername"
                 for el in tree.iter():
+                    if callable(el.tag):
+                        continue
                     if "publishername" in _classes(el):
                         text = (el.text_content() or "").strip().rstrip(",").strip()
                         if text and len(text) < 120:
@@ -1160,6 +1164,8 @@ class KeroOle:
                 # Pattern 2: "Published by ..." in copyright text
                 if not publishers:
                     for el in tree.iter():
+                        if callable(el.tag):
+                            continue
                         cls = _classes(el)
                         ep  = el.get("epub:type", "")
                         if "copyright" not in cls and "copyright-page" not in ep:
