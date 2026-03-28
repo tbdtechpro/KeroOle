@@ -1,6 +1,6 @@
 """Tests for v2 API response normalizers in KeroOle."""
 import pytest
-from kerole import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
+from keroole import API_V2_TEMPLATE, API_V2_CHAPTERS_TEMPLATE, SAFARI_BASE_HOST
 
 
 def test_v2_constants_have_correct_host():
@@ -18,7 +18,7 @@ def test_v2_chapters_template_formats_book_id():
     assert url == "https://learning.oreilly.com/api/v2/epub-chapters/?epub_identifier=urn:orm:book:9781098119058"
 
 
-from kerole import KeroOle, SAFARI_BASE_HOST
+from keroole import KeroOle, SAFARI_BASE_HOST
 
 # Minimal v2 book info response (as returned by the API)
 V2_BOOK_INFO = {

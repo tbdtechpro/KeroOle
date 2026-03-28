@@ -1452,7 +1452,7 @@ class KeroOle:
 
 # MAIN
 if __name__ == "__main__":
-    arguments = argparse.ArgumentParser(prog="kerole.py",
+    arguments = argparse.ArgumentParser(prog="keroole.py",
                                         description="Download and generate an EPUB of your favorite books"
                                                     " from O'Reilly Learning.",
                                         add_help=False,

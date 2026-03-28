@@ -190,7 +190,7 @@ Books/{title}/markdown/
 
 Images without `alt` text automatically get alt text derived from the filename.
 
-Enable: toggle `g` in the Queue screen, or set `markdown_gfm = true` in `~/.kerole.toml`.
+Enable: toggle `g` in the Queue screen, or set `markdown_gfm = true` in `~/.keroole.toml`.
 
 ### Obsidian Markdown
 
@@ -204,7 +204,7 @@ A second Markdown export optimized for [Obsidian](https://obsidian.md) vaults:
 
 Set `markdown_obsidian_dir` in Settings to your vault root and KeroOle will write directly into it.
 
-Enable: toggle `o` in the Queue screen, or set `markdown_obsidian = true` in `~/.kerole.toml`.
+Enable: toggle `o` in the Queue screen, or set `markdown_obsidian = true` in `~/.keroole.toml`.
 
 ### Content DB (`--export-db`)
 
@@ -253,7 +253,7 @@ Output: `Books/{title}/rag/{book_id}_rag.jsonl`. Implies `--export-db`.
 
 ## Configuration
 
-KeroOle stores user configuration in `~/.kerole.toml`. Edit directly or use the **Export Paths / Settings** screen in the TUI.
+KeroOle stores user configuration in `~/.keroole.toml`. Edit directly or use the **Export Paths / Settings** screen in the TUI.
 
 ```toml
 [exports]
@@ -288,7 +288,7 @@ In the TUI: **Export Paths / Settings** → **Scan Library**
 
 Or from the command line:
 ```bash
-python kerole.py --scan-library
+python keroole.py --scan-library
 ```
 
 ### Full-Text Search (SQLite)

@@ -1,7 +1,7 @@
 """
 config.py — User-level configuration for KeroOle.
 
-Config file: ~/.kerole.toml
+Config file: ~/.keroole.toml
 
 Example:
     [exports]
@@ -20,7 +20,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-CONFIG_PATH = Path.home() / ".kerole.toml"
+CONFIG_PATH = Path.home() / ".keroole.toml"
 
 FOLDER_NAME_STYLES = ("title", "id")
 
@@ -107,7 +107,7 @@ def book_folder_name(book_info: dict, book_id: str, style: str = "title") -> str
 # ---------------------------------------------------------------------------
 
 def _load_toml() -> dict:
-    """Load ~/.kerole.toml, returning empty dict if missing or unreadable."""
+    """Load ~/.keroole.toml, returning empty dict if missing or unreadable."""
     if not CONFIG_PATH.exists():
         return {}
     try:
@@ -118,7 +118,7 @@ def _load_toml() -> dict:
 
 
 def load_export_config() -> ExportConfig:
-    """Load [exports] section from ~/.kerole.toml."""
+    """Load [exports] section from ~/.keroole.toml."""
     data = _load_toml()
     e = data.get("exports", {})
     raw_style = e.get("folder_name_style", "title")
@@ -136,7 +136,7 @@ def load_export_config() -> ExportConfig:
 
 
 def load_menu_config() -> MenuConfig:
-    """Load [menu] section from ~/.kerole.toml."""
+    """Load [menu] section from ~/.keroole.toml."""
     data = _load_toml()
     m = data.get("menu", {})
     return MenuConfig(
@@ -150,7 +150,7 @@ def load_menu_config() -> MenuConfig:
 
 
 def save_export_config(cfg: ExportConfig) -> None:
-    """Write [exports] section back to ~/.kerole.toml.
+    """Write [exports] section back to ~/.keroole.toml.
 
     Preserves any other sections already present in the file.
     """
@@ -172,7 +172,7 @@ def save_export_config(cfg: ExportConfig) -> None:
 
 
 def save_menu_config(cfg: MenuConfig) -> None:
-    """Write [menu] section back to ~/.kerole.toml."""
+    """Write [menu] section back to ~/.keroole.toml."""
     existing = _load_toml()
     existing["menu"] = {
         "show_browser_cookie":  cfg.show_browser_cookie,
@@ -241,7 +241,7 @@ def load_unlocked_cheats() -> set[str]:
 
 
 def save_unlocked_cheats(effects: set[str]) -> None:
-    """Persist the unlocked cheat effects to ~/.kerole.toml."""
+    """Persist the unlocked cheat effects to ~/.keroole.toml."""
     existing = _load_toml()
     existing.setdefault("cheats", {})["unlocked"] = ",".join(sorted(effects))
     _write_toml(existing)

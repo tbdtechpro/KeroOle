@@ -36,7 +36,7 @@ from pygloss import (
     Top,
 )
 
-from kerole import COOKIES_FILE, PATH, KeroOle, KeroOleError, API_V2_TEMPLATE
+from keroole import COOKIES_FILE, PATH, KeroOle, KeroOleError, API_V2_TEMPLATE
 from retrieve_cookies import parse_cookie_string, get_oreilly_cookies_from_browser, login_with_credentials
 
 # ── Colours ──────────────────────────────────────────────────────────────────
@@ -1391,7 +1391,7 @@ class AppModel(tea.Model):
         )
         try:
             save_export_config(cfg)
-            self.settings_status = "ok:Settings saved to ~/.kerole.toml"
+            self.settings_status = "ok:Settings saved to ~/.keroole.toml"
         except Exception as exc:
             self.settings_status = f"error:Save failed — {exc}"
 

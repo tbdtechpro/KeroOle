@@ -1,4 +1,4 @@
-"""Tests for kerole.py frozen-exe PATH resolution."""
+"""Tests for keroole.py frozen-exe PATH resolution."""
 import importlib
 import os
 import sys
@@ -11,17 +11,17 @@ def test_frozen_path_uses_executable_directory(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", fake_exe)
 
-    import kerole
-    importlib.reload(kerole)
+    import keroole
+    importlib.reload(keroole)
 
-    assert kerole.PATH == str(tmp_path)
-    assert kerole.COOKIES_FILE == str(tmp_path / "cookies.json")
+    assert keroole.PATH == str(tmp_path)
+    assert keroole.COOKIES_FILE == str(tmp_path / "cookies.json")
 
 
 def test_unfrozen_path_uses_source_directory():
-    """When not frozen, PATH must be the directory containing kerole.py."""
-    import kerole
-    importlib.reload(kerole)
+    """When not frozen, PATH must be the directory containing keroole.py."""
+    import keroole
+    importlib.reload(keroole)
 
-    expected = os.path.dirname(os.path.realpath(kerole.__file__))
-    assert kerole.PATH == expected
+    expected = os.path.dirname(os.path.realpath(keroole.__file__))
+    assert keroole.PATH == expected
