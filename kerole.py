@@ -22,7 +22,10 @@ class KeroOleError(Exception):
     """Raised when KeroOle encounters an unrecoverable error (TUI/API mode)."""
 
 
-PATH = os.path.dirname(os.path.realpath(__file__))
+if getattr(sys, "frozen", False):
+    PATH = os.path.dirname(sys.executable)
+else:
+    PATH = os.path.dirname(os.path.realpath(__file__))
 COOKIES_FILE = os.path.join(PATH, "cookies.json")
 
 ORLY_BASE_HOST = "oreilly.com"  # PLEASE INSERT URL HERE
