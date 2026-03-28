@@ -10,21 +10,36 @@ Download and generate *EPUB* files from your [O'Reilly Learning](https://learnin
 
 ---
 
+## Platform Support
+
+| Platform | Status | Notes |
+|---|---|---|
+| **Linux** | Supported | Primary development and test platform (Ubuntu 24.04) |
+| **Windows** | Experimental — partially tested | TUI renders correctly; clipboard and Calibre conversion not yet verified end-to-end. Windows build script included. |
+| **macOS** | Experimental — untested | Build script included; no test results yet. |
+
+---
+
 ## Overview
 
 - [Requirements & Setup](#requirements--setup)
 - [Authentication](#authentication)
-- [Usage — CLI](#usage--cli)
 - [Usage — Interactive TUI](#usage--interactive-tui)
+- [Usage — CLI](#usage--cli)
 - [Export Features](#export-features)
 - [Calibre EPUB Conversion](#calibre-epub-conversion)
+- [Standalone Executable](#standalone-executable)
 - [Examples](#examples)
 
 ---
 
 ## Requirements & Setup
 
-**Python 3.11+** is required. Run the included setup script to create a virtual environment and install all dependencies:
+**Python 3.10+** is required.
+
+### Linux (Ubuntu / Debian)
+
+Run the included setup script to create a virtual environment and install all dependencies:
 
 ```bash
 git clone https://github.com/tbdtechpro/KeroOle.git
@@ -43,6 +58,28 @@ After setup, activate the environment:
 
 ```bash
 source .venv/bin/activate
+```
+
+### Windows (experimental)
+
+See [Standalone Executable](#standalone-executable) for a one-step build. Or to run from source:
+
+```powershell
+pip install lxml requests browser_cookie3 pyperclip colorama
+# Clone and install bubblepy and pygloss from https://github.com/tbdtechpro/bubblepy
+# and https://github.com/tbdtechpro/pygloss via `pip install -e .`
+python main.py
+```
+
+### macOS (experimental — untested)
+
+See [Standalone Executable](#standalone-executable) for a one-step build. Or to run from source:
+
+```bash
+pip3 install lxml requests browser_cookie3 pyperclip colorama
+# Clone and install bubblepy and pygloss from https://github.com/tbdtechpro/bubblepy
+# and https://github.com/tbdtechpro/pygloss via `pip install -e .`
+python3 main.py
 ```
 
 **Python dependencies** (see `requirements.txt`):
@@ -98,6 +135,27 @@ python retrieve_cookies.py
 
 ---
 
+## Usage — Interactive TUI
+
+Launch the terminal UI for a menu-driven experience:
+
+```bash
+python main.py
+```
+
+The TUI provides:
+- **Login** — email/password login flow
+- **Set Cookie** — paste your browser session cookie
+- **Add Book to Queue** — queue multiple books for batch download
+- **View / Run Queue** — manage the queue with export toggles:
+  - `m` — toggle Markdown export
+  - `d` — toggle Content DB storage
+  - `x` — toggle RAG JSONL export
+  - `k` — toggle skip-if-downloaded
+  - `r` — run all downloads
+
+---
+
 ## Usage — CLI
 
 ```bash
@@ -138,27 +196,6 @@ options:
                         Implies --export-db.
   --help                Show this help message.
 ```
-
----
-
-## Usage — Interactive TUI
-
-Launch the terminal UI for a menu-driven experience:
-
-```bash
-python tui.py
-```
-
-The TUI provides:
-- **Login** — email/password login flow
-- **Set Cookie** — paste your browser session cookie
-- **Add Book to Queue** — queue multiple books for batch download
-- **View / Run Queue** — manage the queue with export toggles:
-  - `m` — toggle Markdown export
-  - `d` — toggle Content DB storage
-  - `x` — toggle RAG JSONL export
-  - `k` — toggle skip-if-downloaded
-  - `r` — run all downloads
 
 ---
 
@@ -264,6 +301,55 @@ For Kindle, use `--kindle` when downloading, then convert to AZW3 or MOBI:
 ```bash
 python kerole.py --kindle BOOKID
 # Then in Calibre: select "Ignore margins" in conversion options
+```
+
+---
+
+## Standalone Executable
+
+A self-contained executable can be built from source using the included build scripts. No Python installation required on the target machine after building.
+
+### Linux
+
+```bash
+chmod +x build-linux.sh
+./build-linux.sh
+```
+
+### Windows (experimental — partially tested)
+
+```powershell
+.\build-windows.ps1
+```
+
+TUI rendering has been verified on Windows 11. Clipboard (Ctrl+V) and Calibre conversion have not been tested end-to-end.
+
+### macOS (experimental — untested)
+
+```bash
+chmod +x build-macos.sh
+./build-macos.sh
+```
+
+macOS build support has not been tested. Feedback welcome.
+
+### After building
+
+The build scripts place the executable at the repo root:
+
+```
+KeroOle/
+  KeroOle          ← Linux / macOS launcher
+  KeroOle.exe      ← Windows launcher
+  _internal/       ← PyInstaller support files (bundled Python, DLLs, etc.)
+  Books/           ← download output (not bundled, created at runtime)
+```
+
+Run it directly — no `python` command or virtual environment needed:
+
+```bash
+./KeroOle          # Linux / macOS
+.\KeroOle.exe      # Windows
 ```
 
 ---

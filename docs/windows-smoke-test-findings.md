@@ -76,10 +76,9 @@ All call sites in `tea.py` that use `termios.tcgetattr` / `termios.tcsetattr` /
 
 ---
 
-## Next Step
+## Resolution
 
-This failure is the go/no-go gate for the cross-platform work described in:
-`docs/superpowers/specs/2026-03-27-cross-platform-runtime-compat-design.md`
-
-**Recommendation:** Implement the Windows terminal compatibility layer in
-`bubblepy/tea.py` before proceeding with any other cross-platform changes.
+This issue was resolved as part of the cross-platform runtime compatibility work
+(commit `c03d0ba`). `bubblepy/tea.py` now guards all `termios`/`tty` imports and
+call sites behind `sys.platform != "win32"`, with `msvcrt`-based equivalents for
+Windows. See Round 2 findings in `windows-smoke-test-findings-2.md`.

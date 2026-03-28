@@ -90,9 +90,10 @@ Option A is the most robust and self-contained fix.
 
 ---
 
-## Next Steps
+## Resolution
 
-1. Fix `bubblepy/renderer.py` to use UTF-8 output on Windows
-2. Re-run smoke test to verify all three pass criteria are met
-3. If pass: implementation of cross-platform changes in
-   `docs/superpowers/specs/2026-03-27-cross-platform-runtime-compat-design.md` can proceed
+The UTF-8 output issue in `bubblepy/renderer.py` was resolved as part of the
+cross-platform runtime compatibility work (commit `c03d0ba`). The renderer now
+wraps stdout with a UTF-8 `TextIOWrapper` on Windows. Subsequent app testing
+(see `windows-app-test-findings.md`) confirmed TUI rendering passes. Clipboard
+(Ctrl+V) and Calibre conversion remain untested in live interactive use.
