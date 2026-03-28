@@ -14,3 +14,13 @@ cookies.json
 *.code-workspace
 
 .worktrees/
+
+# PyInstaller build output
+KeroOle.exe
+KeroOle
+_internal/
+dist/
+build/
+
+# Build venv
+.build-venv/
