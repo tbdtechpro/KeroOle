@@ -125,9 +125,11 @@ python main.py
 
 ### Searching
 
+> **Note:** Search is under active development. Result filtering (publisher, sort order, chapter exclusion) is being iterated on and may not behave perfectly in all cases.
+
 **Search O'Reilly** opens a two-phase search UI:
 
-- Enter a query, optionally filter by format (`books` / `videos` / `all`), topic, or publisher
+- Enter a query, optionally filter by topic or publisher
 - Toggle sort between relevance and newest
 - `[` / `]` pages through results
 - `Space` to add books to the download queue

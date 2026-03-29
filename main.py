@@ -45,6 +45,7 @@ C_ACCENT   = Color("#7C3AED")   # violet
 C_GREEN    = Color("#22C55E")
 C_RED      = Color("#EF4444")
 C_YELLOW   = Color("#EAB308")
+C_ORANGE   = Color("#F97316")   # owned-book indicator
 C_MUTED    = Color("#6B7280")
 C_WHITE    = Color("#F9FAFB")
 C_BG_DARK  = Color("#1F2937")
@@ -70,10 +71,15 @@ panel_style = (
 hint_style   = Style().foreground(C_MUTED).italic(True)
 error_style  = Style().foreground(C_RED).bold(True)
 success_style = Style().foreground(C_GREEN).bold(True)
+owned_style  = Style().foreground(C_ORANGE)
 label_style  = Style().foreground(C_MUTED)
 value_style  = Style().foreground(C_WHITE)
 accent_style = Style().foreground(C_ACCENT).bold(True)
 cursor_style = Style().foreground(C_SELECTED).bold(True)
+
+# Matches chapter/appendix titles: "14. Some Title", "A. Appendix Title", etc.
+# Used to filter individual chapters that appear in search results alongside whole books.
+_CHAPTER_TITLE_RE = re.compile(r'^\d{1,2}\.\s|^[A-Z]\.\s')
 
 # ── ASCII art variants ────────────────────────────────────────────────────────
 # Each variant is a list of lines.  Variant 0 is the default (mixed-case KeroOle).
@@ -211,10 +217,11 @@ class SearchResult:
 
 @dataclass
 class SearchDoneMsg(tea.Msg):
-    results: list          # list of SearchResult
+    results: list          # list of SearchResult (cumulative across all pages fetched)
     total: int
-    page: int
+    page: int              # last page fetched
     error: str = ""
+    final: bool = True     # False = more pages still loading
 
 
 @dataclass
@@ -639,6 +646,19 @@ class SearchWorker:
     """Searches O'Reilly Learning API in a background thread."""
 
     SEARCH_URL = "https://learning.oreilly.com/api/v1/search/"
+    PAGE_SIZE  = 15   # fixed by the API — rows=/limit= params are ignored
+    MAX_PAGES  = 20   # cap at 300 results (20 pages × 15) per search
+
+    # (display label, API partial-match value) — "" means no publisher filter
+    # API supports partial matching, so shorter values are more reliable than full names
+    PUBLISHERS = [
+        ("All",              ""),
+        ("O'Reilly",         "O'Reilly"),
+        ("Packt",            "Packt"),
+        ("Manning",          "Manning"),
+        ("Wiley",            "Wiley"),
+        ("Addison-Wesley",   "Addison-Wesley"),
+    ]
 
     def __init__(self, query: str, format_filter: str, topic: str, publisher: str,
                  sort: str, page: int, program: tea.Program):
@@ -655,42 +675,71 @@ class SearchWorker:
         self._thread.start()
 
     def _run(self):
-        import json as _json
         try:
-            session = self._make_session()
-            params = {"query": self.query, "limit": 10, "page": self.page}
-            if self.format_filter:
-                params["formats"] = self.format_filter
-            if self.topic:
-                params["topics"] = self.topic
-            if self.publisher:
-                params["publishers"] = self.publisher
-            if self.sort == "created_time":
-                params["sort"] = "created_time"
+            session  = self._make_session()
+            all_results: list = []
+            total    = 0
+            cur_page = self.page
 
-            resp = session.get(self.SEARCH_URL, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
+            while True:
+                # rows=/limit= are ignored by this endpoint (fixed 15/page)
+                params: dict = {"q": self.query, "page": cur_page, "type": "book"}
+                if self.topic:
+                    params["topics"] = self.topic
+                if self.publisher:
+                    params["publishers"] = self.publisher
+                if self.sort == "created_time":
+                    params["order_by"] = "published_at"
 
-            results = []
-            for item in data.get("results", []):
-                authors = [a.get("name", "") for a in item.get("authors", [])]
-                pubs    = [p.get("name", "") for p in item.get("publishers", [])]
-                topics  = [t.get("name", "") for t in item.get("topics", [])][:4]
-                results.append(SearchResult(
-                    book_id=str(item.get("archive_id", "")),
-                    title=item.get("title", ""),
-                    authors_str=", ".join(authors),
-                    publishers_str=", ".join(pubs),
-                    issued=(item.get("issued") or "")[:4],   # year only
-                    page_count=item.get("virtual_pages", 0) or 0,
-                    topics_str=", ".join(topics),
-                    description=item.get("description", ""),
-                    cover_url=item.get("cover", ""),
-                    format=item.get("format", "book"),
+                resp = session.get(self.SEARCH_URL, params=params, timeout=15)
+                resp.raise_for_status()
+                data = resp.json()
+
+                page_results = []
+                for item in data.get("results", []):
+                    authors = [a.get("name", "") for a in item.get("authors", [])]
+                    pubs    = [p.get("name", "") for p in item.get("publishers", [])]
+                    topics  = [t.get("name", "") for t in item.get("topics", [])][:4]
+                    page_results.append(SearchResult(
+                        book_id=str(item.get("archive_id", "")),
+                        title=item.get("title", ""),
+                        authors_str=", ".join(authors),
+                        publishers_str=", ".join(pubs),
+                        issued=(item.get("issued") or "")[:4],
+                        page_count=item.get("virtual_pages", 0) or 0,
+                        topics_str=", ".join(topics),
+                        description=item.get("description", ""),
+                        cover_url=item.get("cover", ""),
+                        format=item.get("format", "book"),
+                    ))
+
+                # API returns total in "count" field
+                total = next(
+                    (data[k] for k in ("count", "total", "num_results", "total_results") if k in data),
+                    len(all_results) + len(page_results),
+                )
+                all_results.extend(page_results)
+
+                # Determine whether we've reached the last page.
+                # Don't use "partial page" as a stop condition — O'Reilly ignores
+                # the rows= parameter and always returns ~15 results regardless.
+                is_last = (
+                    not page_results                                   # empty page
+                    or len(all_results) >= total                       # fetched everything
+                    or cur_page >= self.page + self.MAX_PAGES - 1     # hit cap
+                )
+
+                self.program.send(SearchDoneMsg(
+                    results=list(all_results),
+                    total=total,
+                    page=cur_page,
+                    final=is_last,
                 ))
-            total = data.get("total", len(results))
-            self.program.send(SearchDoneMsg(results=results, total=total, page=self.page))
+
+                if is_last:
+                    break
+                cur_page += 1
+
         except Exception as exc:
             self.program.send(SearchDoneMsg(results=[], total=0, page=self.page,
                                             error=str(exc)))
@@ -885,7 +934,7 @@ class AppModel(tea.Model):
         self.search_query: str = ""
         self.search_topic: str = ""
         self.search_publisher: str = ""
-        self.search_format: str = "book"    # "book", "video", ""
+        self.search_format: str = ""         # unused — format filter hidden
         self.search_sort: str = "relevance" # "relevance" or "created_time"
         self.search_results: list = []
         self.search_cursor: int = 0
@@ -895,10 +944,14 @@ class AppModel(tea.Model):
         self.search_total: int = 0
         self.search_status: str = ""
         self.search_running: bool = False
-        # search form phase: "form" (entering query) or "results" (viewing results)
+        # search form phase: "form" → "loading" (waiting for first page) → "results"
         self.search_phase: str = "form"
         # which form field is focused: 0=query, 1=topic, 2=publisher
         self.search_field: int = 0
+        # set of book_ids already in the local library (refreshed on each search)
+        self.search_downloaded_ids: set = set()
+        # when True, downloaded books are hidden from results
+        self.search_hide_downloaded: bool = False
 
         # settings screen
         from config import load_export_config
@@ -1052,11 +1105,15 @@ class AppModel(tea.Model):
                 with open(COOKIES_FILE, "w") as f:
                     json.dump(msg.cookies, f)
                 self.cookie_saved = True
-                self.cookie_status = f"ok:Saved {len(msg.cookies)} cookies from browser."
+                self.cookie_status = "ok:Cookies retrieved from browser."
             else:
-                self.cookie_status = (
-                    f"error:{msg.error or 'Browser extraction failed — try the CLI tool instead.'}"
-                )
+                err = msg.error or "Browser extraction failed."
+                if self.screen == Screen.MAIN:
+                    # Auto-fetch failed — send user to the paste screen with context
+                    self.cookie_status = f"error:{err}  Paste your cookie below instead."
+                    self.screen = Screen.COOKIE
+                else:
+                    self.cookie_status = f"error:{err}"
             return self, None
 
         if isinstance(msg, ClipboardMsg):
@@ -1079,20 +1136,27 @@ class AppModel(tea.Model):
             return self, None
 
         if isinstance(msg, SearchDoneMsg):
-            self.search_running = False
             if msg.error:
+                self.search_running = False
                 self.search_status = "error:" + msg.error
             else:
+                is_first_page = self.search_phase != "results"
                 self.search_results = msg.results
                 self.search_total   = msg.total
                 self.search_page    = msg.page
-                self.search_cursor  = 0
-                self.search_scroll  = 0
-                self.search_status  = ""
+                if is_first_page:
+                    self.search_cursor = 0
+                    self.search_scroll = 0
+                self.search_running = not msg.final
+                self.search_status  = "" if msg.final else f"Loading… ({len(msg.results)} results so far)"
+                self.search_downloaded_ids = self._get_downloaded_ids(
+                    {r.book_id for r in msg.results}
+                )
                 if msg.results:
                     self.search_phase = "results"
-                else:
+                elif msg.final:
                     self.search_status = "No results found."
+                    self.search_phase = "form"
             return self, None
 
         return self, None
@@ -1143,7 +1207,6 @@ class AppModel(tea.Model):
             if target is None:
                 return self, tea.quit_cmd
             if target == "BROWSER":
-                self.screen = Screen.COOKIE
                 self.cookie_status = ""
                 self._retrieve_from_browser()
             else:
@@ -1642,6 +1705,29 @@ class AppModel(tea.Model):
         except Exception:
             self.lib_books = []
 
+    def _get_downloaded_ids(self, book_ids: set) -> set:
+        """Return the subset of book_ids already in the local registry."""
+        if not book_ids:
+            return set()
+        try:
+            from config import load_export_config as _lec
+            exp_cfg = _lec()
+            books_dir = os.path.join(PATH, "Books")
+            db_path = exp_cfg.resolved_db_path() or os.path.join(books_dir, "library.db")
+            if not os.path.isfile(db_path):
+                return set()
+            import sqlite3 as _sq
+            conn = _sq.connect(db_path)
+            placeholders = ",".join("?" * len(book_ids))
+            rows = conn.execute(
+                f"SELECT book_id FROM registry WHERE book_id IN ({placeholders})",
+                list(book_ids),
+            ).fetchall()
+            conn.close()
+            return {row[0] for row in rows}
+        except Exception:
+            return set()
+
     def _start_export_library(self, selected_ids=None):
         """Start library export. If selected_ids is given, export only those books."""
         if not (self.export_markdown or self.export_obsidian or self.export_db or self.export_rag):
@@ -1820,6 +1906,9 @@ class AppModel(tea.Model):
         else:
             badge = error_style.render("○ Cookie: not set")
         lines.append("  " + badge)
+
+        if self.cookie_retrieving:
+            lines.append("  " + Style().foreground(C_YELLOW).render("⟳ Retrieving cookies from browser…"))
         lines.append("")
 
         # Menu items — filter hidden items unless unlocked via cheat
@@ -2511,60 +2600,83 @@ class AppModel(tea.Model):
     def _key_search(self, key: str):
         if self.search_phase == "form":
             return self._key_search_form(key)
+        elif self.search_phase == "loading":
+            return self._key_search_loading(key)
         else:
             return self._key_search_results(key)
 
     def _key_search_form(self, key: str):
-        _EDITABLE = {0, 1, 2}
+        _EDITABLE = {0, 1}   # text-input fields
 
         if key == "escape":
             self.screen = Screen.MAIN
         elif key in ("tab", "down"):
-            self.search_field = (self.search_field + 1) % 5
+            self.search_field = (self.search_field + 1) % 4
         elif key in ("shift+tab", "up"):
-            self.search_field = (self.search_field - 1) % 5
-        elif self.search_field == 3:
-            # format toggle
-            if key in (" ", "enter", "left", "right"):
-                options = ("book", "video", "")
-                idx = options.index(self.search_format) if self.search_format in options else 0
-                self.search_format = options[(idx + 1) % len(options)]
-        elif self.search_field == 4:
-            # sort toggle
-            if key in (" ", "enter", "left", "right"):
-                self.search_sort = "created_time" if self.search_sort == "relevance" else "relevance"
-        elif key == "enter" and self.search_field in _EDITABLE:
-            if self.search_query.strip():
+            self.search_field = (self.search_field - 1) % 4
+        elif self.search_field == 2:
+            # publisher cycle — Space/arrows step through options; Enter runs search
+            pub_values = [v for _, v in SearchWorker.PUBLISHERS]
+            cur = pub_values.index(self.search_publisher) if self.search_publisher in pub_values else 0
+            if key in (" ", "right"):
+                self.search_publisher = pub_values[(cur + 1) % len(pub_values)]
+            elif key == "left":
+                self.search_publisher = pub_values[(cur - 1) % len(pub_values)]
+            elif key == "enter":
                 self._run_search(page=1)
+        elif self.search_field == 3:
+            # sort toggle — Space/arrows toggle; Enter runs search
+            if key in (" ", "left", "right"):
+                self.search_sort = "created_time" if self.search_sort == "relevance" else "relevance"
+            elif key == "enter":
+                self._run_search(page=1)
+        elif key == "enter" and self.search_field in _EDITABLE:
+            self._run_search(page=1)
         elif self.search_field in _EDITABLE and key in ("backspace", "delete"):
             if self.search_field == 0:
                 self.search_query = self.search_query[:-1]
             elif self.search_field == 1:
                 self.search_topic = self.search_topic[:-1]
-            elif self.search_field == 2:
-                self.search_publisher = self.search_publisher[:-1]
         elif self.search_field in _EDITABLE and key == "ctrl+u":
             if self.search_field == 0:
                 self.search_query = ""
             elif self.search_field == 1:
                 self.search_topic = ""
-            elif self.search_field == 2:
-                self.search_publisher = ""
         elif self.search_field in _EDITABLE and len(key) == 1 and key.isprintable():
             if self.search_field == 0:
                 self.search_query += key
             elif self.search_field == 1:
                 self.search_topic += key
-            elif self.search_field == 2:
-                self.search_publisher += key
         return self, None
 
     def _key_search_results(self, key: str):
-        total = len(self.search_results)
+        # Use the same filtered list the view renders — cursor indexes into this list
+        if self.search_hide_downloaded and self.search_downloaded_ids:
+            visible_results = [r for r in self.search_results if r.book_id not in self.search_downloaded_ids]
+        else:
+            visible_results = list(self.search_results)
+
+        # Mirror client-side filters from _view_search_results exactly
+        visible_results = [
+            r for r in visible_results
+            if r.format == "book"
+            and not _CHAPTER_TITLE_RE.match(r.title)
+            and (r.page_count == 0 or r.page_count >= 50)
+        ]
+        seen: dict = {}
+        for r in visible_results:
+            if r.book_id not in seen or r.page_count > seen[r.book_id].page_count:
+                seen[r.book_id] = r
+        visible_results = list(seen.values())
+        if self.search_publisher:
+            visible_results = [r for r in visible_results if self.search_publisher.lower() in r.publishers_str.lower()]
+
+        total = len(visible_results)
         rows  = max(3, self.height - 12)
 
         if key in ("escape", "q"):
             self.search_phase = "form"
+            self.search_field = 0
             self.search_status = ""
         elif key in ("up", "k"):
             self.search_cursor = max(0, self.search_cursor - 1)
@@ -2576,19 +2688,15 @@ class AppModel(tea.Model):
                 self.search_scroll = self.search_cursor - rows + 1
         elif key == " ":
             if 0 <= self.search_cursor < total:
-                bid = self.search_results[self.search_cursor].book_id
+                bid = visible_results[self.search_cursor].book_id
                 if bid in self.search_selected:
                     self.search_selected.discard(bid)
                 else:
                     self.search_selected.add(bid)
-        elif key in ("]",):
-            if not self.search_running:
-                max_page = max(1, (self.search_total + 9) // 10)
-                if self.search_page < max_page:
-                    self._run_search(page=self.search_page + 1)
-        elif key in ("[",):
-            if not self.search_running and self.search_page > 1:
-                self._run_search(page=self.search_page - 1)
+        elif key == "h":
+            self.search_hide_downloaded = not self.search_hide_downloaded
+            self.search_cursor = 0
+            self.search_scroll = 0
         elif key in ("enter", "r", "R"):
             # Add selected results to queue and go to QUEUE screen
             added = 0
@@ -2608,6 +2716,7 @@ class AppModel(tea.Model):
         if self.search_running:
             return
         self.search_running = True
+        self.search_phase = "loading"
         self.search_status = "Searching…"
         worker = SearchWorker(
             query=self.search_query.strip(),
@@ -2623,6 +2732,8 @@ class AppModel(tea.Model):
     def _view_search(self) -> str:
         if self.search_phase == "results":
             return self._view_search_results()
+        elif self.search_phase == "loading":
+            return self._view_search_loading()
         return self._view_search_form()
 
     def _view_search_form(self) -> str:
@@ -2646,23 +2757,19 @@ class AppModel(tea.Model):
         lines.append("")
         lines += _field("Topic filter", self.search_topic, 1, "e.g. python, cloud, security  (optional)")
         lines.append("")
-        lines += _field("Publisher filter", self.search_publisher, 2, "e.g. oreilly, packt  (optional)")
-        lines.append("")
 
-        # Format toggle
-        fmt_focused = self.search_field == 3
-        fmt_labels = {"book": "Books", "video": "Videos", "": "All"}
-        fmt_row = "  " + "  ".join(
-            accent_style.render(f"[{v}]") if self.search_format == k else hint_style.render(f"[{v}]")
-            for k, v in fmt_labels.items()
+        # Publisher cycle
+        pub_focused = self.search_field == 2
+        pub_row = "  " + "  ".join(
+            accent_style.render(f"[{label}]") if self.search_publisher == val else hint_style.render(f"[{label}]")
+            for label, val in SearchWorker.PUBLISHERS
         )
-        lbl = (accent_style if fmt_focused else label_style).render("Format")
-        lines.append(lbl)
-        lines.append(fmt_row)
+        lines.append((accent_style if pub_focused else label_style).render("Publisher"))
+        lines.append(pub_row)
         lines.append("")
 
         # Sort toggle
-        sort_focused = self.search_field == 4
+        sort_focused = self.search_field == 3
         relevance_s  = accent_style.render("[Relevance]") if self.search_sort == "relevance" else hint_style.render("[Relevance]")
         newest_s     = accent_style.render("[Newest]")    if self.search_sort == "created_time" else hint_style.render("[Newest]")
         lbl = (accent_style if sort_focused else label_style).render("Sort")
@@ -2677,65 +2784,142 @@ class AppModel(tea.Model):
                 lines.append(hint_style.render("  " + self.search_status))
             lines.append("")
 
-        lines.append(self._footer("Tab/↓ move  Enter search  ←→ toggle options  Esc back"))
+        lines.append(self._footer("Tab/↓ move  Enter search  Space/←→ toggle options  Esc back"))
         return panel_style.width(min(self.width - 4, 72)).render("\n".join(lines))
 
+    def _view_search_loading(self) -> str:
+        lines = [self._header("Search O'Reilly — Searching"), ""]
+
+        SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        spinner = accent_style.render(SPINNER[len(self.search_results) % len(SPINNER)])
+        query_display = self.search_query.strip()[:44]
+        lines.append(f"  {spinner}  Searching for \"{query_display}\"…")
+        lines.append("")
+
+        pages_done = self.search_page if self.search_results else 0
+        pct = pages_done / max(SearchWorker.MAX_PAGES, 1)
+        lines.append("  " + render_bar(pct, width=32))
+        lines.append("")
+
+        if self.search_results:
+            n = len(self.search_results)
+            t = self.search_total
+            lines.append(hint_style.render(f"  {n} of {t} results loaded…"))
+        else:
+            lines.append(hint_style.render("  Connecting to O'Reilly API…"))
+        lines.append("")
+
+        lines.append(self._footer("Esc  cancel"))
+        return panel_style.width(min(self.width - 4, 72)).render("\n".join(lines))
+
+    def _key_search_loading(self, key: str):
+        if key == "escape":
+            self.search_running = False
+            self.search_phase = "form"
+            self.search_results = []
+            self.search_total = 0
+        return self, None
+
     def _view_search_results(self) -> str:
-        results = self.search_results
-        total   = self.search_total
-        page    = self.search_page
-        max_page = max(1, (total + 9) // 10)
+        all_results = self.search_results
+        total       = self.search_total
+
+        # Apply hide-downloaded filter to the display list (not to navigation state)
+        if self.search_hide_downloaded and self.search_downloaded_ids:
+            results = [r for r in all_results if r.book_id not in self.search_downloaded_ids]
+        else:
+            results = all_results
+
+        # Client-side: strip individual chapters/sections the API returns alongside whole books.
+        # Three signals, any one is sufficient to mark an item as a chapter:
+        #   1. format != "book" (videos, etc.)
+        #   2. Numbered title pattern: "14. Something" or "A. Appendix" (chapter/appendix heading)
+        #   3. Very short page count (< 50p) — whole books are virtually never this short;
+        #      legitimate O'Reilly short-form content (Shortcuts, reports) has its own content type.
+        results = [
+            r for r in results
+            if r.format == "book"
+            and not _CHAPTER_TITLE_RE.match(r.title)
+            and (r.page_count == 0 or r.page_count >= 50)
+        ]
+
+        # Deduplicate by book_id — when the full book AND chapters both appear, keep the full book
+        seen: dict = {}
+        for r in results:
+            if r.book_id not in seen or r.page_count > seen[r.book_id].page_count:
+                seen[r.book_id] = r
+        results = list(seen.values())
+
+        # Client-side publisher filter (server-side publishers= param is unreliable)
+        if self.search_publisher:
+            results = [r for r in results if self.search_publisher.lower() in r.publishers_str.lower()]
 
         lines = [self._header("Search O'Reilly — Results"), ""]
 
         # Summary bar
-        sel_count = len(self.search_selected)
-        summary = f"  {total} results  •  page {page}/{max_page}  •  {sel_count} selected"
+        sel_count  = len(self.search_selected)
+        loaded     = len(all_results)
+        hide_label = hint_style.render("  [h:show all]") if self.search_hide_downloaded else hint_style.render("  [h:hide downloaded]")
         if self.search_running:
-            summary += "  " + hint_style.render("⟳ loading…")
-        lines.append(accent_style.render(summary))
+            summary = f"  {loaded} of {total} loaded  •  {sel_count} selected  ⟳"
+        else:
+            summary = f"  {loaded} of {total} results loaded  •  {sel_count} selected"
+        lines.append(accent_style.render(summary) + hide_label)
         lines.append("")
 
         if not results and not self.search_running:
-            lines.append(hint_style.render("  No results."))
+            lines.append(hint_style.render("  No results." if all_results else "  No results."))
+            if self.search_hide_downloaded and len(all_results) > len(results):
+                lines.append(hint_style.render("  (all results already downloaded — press h to show)"))
             lines.append("")
             lines.append(self._footer("Esc  back to form"))
             return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
 
         rows = max(3, self.height - 12)
         self.search_scroll = max(0, min(self.search_scroll, max(0, len(results) - rows)))
+        self.search_cursor = max(0, min(self.search_cursor, max(0, len(results) - 1)))
         visible = results[self.search_scroll: self.search_scroll + rows]
 
         for i, result in enumerate(visible):
-            abs_idx = self.search_scroll + i
-            focused  = abs_idx == self.search_cursor
-            checked  = result.book_id in self.search_selected
+            abs_idx    = self.search_scroll + i
+            focused    = abs_idx == self.search_cursor
+            checked    = result.book_id in self.search_selected
+            owned      = result.book_id in self.search_downloaded_ids
 
-            fmt_icon = hint_style.render("[V]") if result.format == "video" else ""
-            box      = accent_style.render("[✓]") if checked else "[ ]"
-            prefix   = "▶ " if focused else "  "
-            title    = result.title[:38]
-            year     = result.issued[:4] if result.issued else ""
-            pages    = f"{result.page_count}p" if result.page_count else ""
-            meta     = "  " + hint_style.render(
-                " · ".join(filter(None, [result.authors_str[:24], result.publishers_str[:16],
-                                          year, pages]))
-            )
-            row = f"{prefix}{box} {fmt_icon} {title}"
+            fmt_icon   = "[V]" if result.format == "video" else ""
+            prefix     = "▶ " if focused else "  "
+            title      = result.title[:36]
+            year       = result.issued[:4] if result.issued else ""
+            pages      = f"{result.page_count}p" if result.page_count else ""
+            meta_text  = "  " + " · ".join(filter(None, [result.authors_str[:24],
+                                                           result.publishers_str[:16], year, pages]))
+            own_marker = " ↓" if owned else "  "
+
             if focused:
+                box = accent_style.render("[✓]") if checked else "[ ]"
+                row = f"{prefix}{box}{own_marker} {fmt_icon} {title}"
                 lines.append(cursor_style.render(row))
-                lines.append(meta)
+                lines.append(hint_style.render(meta_text))
+            elif owned:
+                # Build row without inner ANSI codes so owned_style applies uniformly
+                box = "[✓]" if checked else "[ ]"
+                row = f"{prefix}{box}{own_marker} {fmt_icon} {title}"
+                lines.append(owned_style.render(row))
+                lines.append(hint_style.render(meta_text))
             else:
+                box = accent_style.render("[✓]") if checked else "[ ]"
+                row = f"{prefix}{box}{own_marker} {fmt_icon} {title}"
                 lines.append(row)
-                lines.append(meta)
+                lines.append(hint_style.render(meta_text))
 
-        if len(results) < total:
+        near_end = (self.search_scroll + rows) >= len(results) - 3
+        if self.search_running and near_end:
             lines.append("")
-            lines.append(hint_style.render(f"  [ to prev page  ] to next page"))
+            lines.append(hint_style.render("  ⟳ Loading more results…"))
 
         lines.append("")
         lines.append(self._footer(
-            "↑/↓ move  Space select  Enter/r add to queue  [ prev  ] next  Esc back"
+            "↑/↓ move  Space select  Enter/r add to queue  h hide owned  Esc back"
         ))
         return panel_style.width(min(self.width - 4, 80)).render("\n".join(lines))
 
